@@ -1,0 +1,58 @@
+---
+title: "Data Wrangling"
+format: html
+editor: Ming
+---
+
+# 1) Setup  
+Prepare the packages and raw materials that we need for data wrangling.
+```{r Setup, message=FALSE}
+# Loading packages (every time you open R)
+library(readxl) # to read excel files
+library(janitor) # to clean data
+library(dplyr) # wranglingdd
+library(tidyr) # wrangling
+library(readr) # to export csv
+.libPaths()
+```
+
+
+```{r Read files}
+getwd() #get your working directory
+Meta <- read_csv("../data/training/training_meta.csv")
+Soil <- read_csv("../data/training/training_soil.csv")
+Trait <- read_csv("../data/training/training_trait.csv")
+
+glimpse(Meta)
+glimpse(Soil)
+glimpse(Trait)
+
+```
+```{r intial }
+meta <- clean_names(Meta)
+soil <- clean_names(Soil)
+trait <- clean_names(Trait)
+
+glimpse(soil)
+
+```
+
+Merge three csv.
+```{r Merge}
+# clean soil, seperate site-year
+soil_clean <- soil %>%
+  separate(site, into = c("site", "year"), sep = "_") %>%
+  mutate(year = as.integer(year))
+
+# merge
+data_merged <- trait %>%
+  left_join(Meta, by = c("site", "year")) %>%
+  left_join(soil_clean, by = c("site", "year"))
+
+glimpse(soil_clean)
+```
+```{r Check merged data }
+sum(is.na(data_merged$latitude))
+sum(is.na(data_merged$soilpH))
+```
+
