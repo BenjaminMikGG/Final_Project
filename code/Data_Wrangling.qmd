@@ -4,18 +4,24 @@ format: html
 editor: Ming
 ---
 
-# 1) Setup  
+# 1) Setup
+
 Prepare the packages and raw materials that we need for data wrangling.
+
 ```{r Setup, message=FALSE}
 # Loading packages (every time you open R)
+#install.packages("nasapower") #
+#install.packages("beepr")
 library(readxl) # to read excel files
 library(janitor) # to clean data
 library(dplyr) # wranglingdd
 library(tidyr) # wrangling
 library(readr) # to export csv
+library(nasapower) # for NASA POWER API
+library(purrr) # for mapping
+library(beepr) # for beep
 .libPaths()
 ```
-
 
 ```{r Read files}
 getwd() #get your working directory
@@ -28,6 +34,82 @@ glimpse(Soil)
 glimpse(Trait)
 
 ```
+
+
+# 2) Open source data
+
+
+```{r}
+# get weather data based on year, site, lon, lat in meta data
+
+meta_unique <- Meta %>%
+  distinct(site, year, latitude, longitude)
+glimpse(meta_unique) 
+# Example of R api 
+#https://docs.ropensci.org/nasapower/articles/nasapower.htm
+
+# learn api
+help(package = "nasapower")
+
+
+
+# test api
+weather <- get_power(
+  community = "AG",   # agriculture
+  lonlat = c(-83.4, 35.2),  # 经度, 纬度
+  dates = c("2014-01-01", "2023-12-31"),
+  pars = c(
+  "T2M",
+  "T2M_MAX",
+  "T2M_MIN",
+  "PRECTOTCORR",
+  "ALLSKY_SFC_SW_DWN"
+)  # mean tmp, max, min, precipitation, radiation
+)
+
+glimpse(weather) 
+```
+```{r create a function}
+get_weather <- function(lon, lat, yr, site_name ) {
+  cat("Running:", site_name, yr, "\n")
+  x <- get_power(
+    community = "AG",
+    lonlat = c(lon, lat),
+    dates = c(paste0(yr, "-01-01"), paste0(yr, "-12-31")),
+    pars = c(
+      "T2M",
+      "T2M_MAX",
+      "T2M_MIN",
+      "PRECTOTCORR",
+      "ALLSKY_SFC_SW_DWN"
+    ),
+    temporal_api = "daily"
+  )
+  
+  Sys.sleep(1)  # avoid be banned by api limit 
+
+}
+
+
+```
+
+```{r iteration}
+weather_summary <- meta_unique %>%
+  mutate(
+    weather = pmap(
+      list(longitude, latitude, year, site),
+      ~ get_weather(..1, ..2, ..3, ..4)
+    )
+  ) %>%
+  tidyr::unnest(weather)
+ #beep
+  beep()
+```
+
+
+# 3) Data wrangling  
+
+## On training data
 ```{r intial }
 meta <- clean_names(Meta)
 soil <- clean_names(Soil)
@@ -38,6 +120,7 @@ glimpse(soil)
 ```
 
 Merge three csv.
+
 ```{r Merge}
 # clean soil, seperate site-year
 soil_clean <- soil %>%
@@ -51,8 +134,20 @@ data_merged <- trait %>%
 
 glimpse(soil_clean)
 ```
+
+
 ```{r Check merged data }
 sum(is.na(data_merged$latitude))
 sum(is.na(data_merged$soilpH))
+
+```
+## On weather data
+```{r daily to week }
+
+
 ```
 
+```{r accumulative temp }
+
+
+```
