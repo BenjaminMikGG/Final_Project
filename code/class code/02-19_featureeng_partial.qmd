@@ -1,0 +1,250 @@
+---
+title: "Feature Engineering"
+format: html
+---
+
+# Introduction  
+The practice of finding better representations of predictors (i.e., features) to improve predictive performance is referred to as “feature engineering.”
+
+In other words, sometimes the predictor variables at hand are not in themselves the best representation to explain a predicted variable.  
+
+In these cases, we can use these original predictor variables to derive new, more informative secondary variables.  
+
+
+# Learning objectives  
+Our learning objectives are to:  
+
+  - Apply feature engineering concepts to Daymet daily weather data  
+  - Export the feature-engineered data set for further use 
+
+# Setup  
+```{r}
+#| message: false
+#| warning: false
+
+library(tidyverse)
+```
+
+```{r}
+fieldweather <- read_csv("../data/fieldweatherdata.csv")
+
+fieldweather
+```
+
+Our data set contains **254,770** rows comprised by **698** site-years and **365** days/site-year worth of weather data.  
+
+# EDA  
+```{r}
+summary(fieldweather)
+```
+
+Let's create some density plots to explore the weather data distributions.  
+```{r}
+fieldweather %>%
+  pivot_longer(cols = dayl_s:vp_pa) %>%
+  ggplot(aes(x = value)) + 
+  geom_density() +
+  facet_wrap(~name, scales = "free") 
+
+```
+
+# Feature engineering  
+Let's take another look at the data at hand:
+```{r}
+fieldweather 
+```
+
+Currently, we have weather data for each site-year at a **daily** time interval.  
+
+Although this level of temporal resolution is great, plant outputs like yield or quality rarely respond to weather events that occur in one given day (unless it is a severe event like flooding or tornado).  
+
+Rather, plants respond to the cumulative effects of weather across many days. 
+
+How could we use this understanding to create new features from the current ones?    
+
+## Quiz - go to eLC  
+
+
+
+
+
+
+
+
+
+
+There are **two components** that we can consider when feature engineering weather data:  
+
+1. Summarizing time **window size**  
+  - Weekly  
+  - Monthly  
+  - Every 2 months  
+  - Growing season  
+  - Based on crop growth stages  
+  - Other?  
+  
+2. Summarizing **function**  
+  - Mean  
+  - Median  
+  - Minimum  
+  - Maximum  
+  - Standard deviation  
+
+In the next section, let's use the following:  
+  - Summarizing time window size: **monthly**  
+  - Summarizing function: **mean** or **sum**  
+
+## Quiz - go to eLC  
+
+Let's take a look into date formats in R:  
+https://www.r-bloggers.com/2013/08/date-formats-in-r/ 
+
+A great package to work with dates and times in R is called **lubridate**, see vignette here: https://lubridate.tidyverse.org/index.html  
+
+Next, let's create a column containing the month information.  
+
+```{r fe_month}
+fe_month <- fieldweather %>%
+  # Selecting needed variables
+  dplyr::select(year, site, lat, lon,
+                strength_gtex,
+                yday,
+                dayl.s = dayl_s, 
+                prcp.mm = prcp_mm_day,
+                srad.wm2 = srad_w_m_2, 
+                tmax.c = tmax_deg_c, 
+                tmin.c = tmin_deg_c,
+                vp.pa = vp_pa
+                ) %>%
+  # Creating a date class variable  
+  mutate(date_chr = paste0(year,"/",yday)) %>%
+  mutate(date = as.Date(date_chr,"%Y/%j")) %>%
+  # Extracting month from date  
+  mutate(month = month(date)) %>%
+  mutate(month_abb = month(date, label = T))
+
+fe_month
+```
+
+Now, let's summarize daily weather variables based on month.  
+```{r fe_month_sum}
+fe_month_sum <- fe_month %>%
+  #because every colunm grouped will show, so we need include strength,which is the y
+  group_by(year, site, month_abb, strength_gtex) %>%
+  summarise(across(.cols = c(dayl.s,
+                             srad.wm2,
+                             tmax.c,
+                             tmin.c,
+                             vp.pa
+                             ),
+                   .fns = mean,
+                   .names = "mean_{.col}"
+                   ),
+            across(.cols = prcp.mm,
+                   .fns = sum,
+                   .names = "sum_{.col}")
+            ) %>%
+  ungroup()
+
+
+fe_month_sum
+```
+
+8,376 rows because 698 site-years x 12 months.  
+
+Let's check tmax.c and prcp.mm for the first site-year and month.  
+
+```{r}
+fe_month %>%
+  filter(year == 1980 & 
+           site == "Altus, OK" &
+           month_abb == "Jan") %>%
+  summarise(tmax.c = mean(tmax.c),
+            prcp.mm = sum(prcp.mm))
+```
+
+Now, what if we wanted to have month as part of the column name instead?  
+
+```{r fe_month_sum_wide}
+fe_month_sum_wide <- fe_month_sum %>%
+  pivot_longer(mean_dayl.s:sum_prcp.mm) %>%
+  mutate(varname = paste0(name, "_",month_abb)) %>%
+  dplyr::select(-name,-month_abb) %>%
+  pivot_wider(names_from = varname,
+              values_from = value) %>%
+  # Rounding to one decimal point
+  mutate(across(c(3:75), ~round(.,1)))
+
+fe_month_sum_wide  
+```
+Notice how we are back at **698** rows.  
+
+For each site-year, we have one piece of weather information for each of the weather variables (as opposed to the original Daymet data that had 365 rows per site-year).  
+
+Let's explore our newly engineered variables.  
+
+# EDA round 2  
+Let's make a ridge plot to visualize the distribution of one variable over months.  
+
+```{r}
+#install.packages("ggridges")
+library(ggridges)
+
+ggplot(data = fe_month_sum,
+       aes(x = mean_tmax.c,
+           y = month_abb,
+           fill = stat(x))
+       ) + geom_density_ridges_gradient(scale = 2,
+                                        rel_min_height = 0.01)  +
+  scale_fill_viridis_c(option = "C",alpha = .8) +
+  theme(legend.position = "none") +
+  labs(x = "Monthly-averaged maximum temperature (C)")
+```
+
+Now let's do that for all variables.  
+```{r}
+finalplots <- fe_month_sum %>%
+  pivot_longer(mean_dayl.s:sum_prcp.mm) %>%
+  group_by(name) %>%
+  nest() %>%
+  mutate(plot = map2(data,name,
+                     ~ggplot(data = .x,
+       aes(x = value ,
+           y = month_abb,
+           fill = stat(x))
+       ) + geom_density_ridges_gradient(scale = 2,
+                                        rel_min_height = 0.01)  +
+  scale_fill_viridis_c(option = "C",alpha = .8) +
+  theme(legend.position = "none") +
+  labs(x = .y,
+       y = "Month"
+       )
+                       
+                       ))
+  
+finalplots$plot
+```
+
+```{r}
+#| message: false
+
+finalplots$plot
+```
+
+# Exporting  
+```{r}
+write_csv(fe_month_sum_wide,
+          "../data/weather_monthsum.csv")
+```
+
+# Summary  
+In this exercise, we:  
+  - Imported the original **7** weather variables from Daymet  
+  - Feature engineered a total of **72** secondary variables by applying a summarizing window size of **month** and a summarizing function of **mean or sum**.  
+  - Explored the data distribution of the new variables.  
+  - Exported to file to be used in subsequent exercises.
+
+
+
+
+  

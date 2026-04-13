@@ -1,0 +1,273 @@
+---
+title: "Assignment 6 - Open data and API"
+author: "Liming Zhou"  
+format:
+  html:
+    code-fold: true 
+    embed-resources: true
+    toc: true
+    number-sections: true
+    theme: cerulean
+---
+
+# Goal of this assignment  
+The goal of this assignment is for you to leverage open data APIs in R related to your field of study.  
+
+In specific, you will be asked to:  
+  - Identify an open data base related to your field of study  
+  - Retrieve data from it into R (bonus points if through an API instead of manually)  
+  - Create questions one could ask of these data, and answer them with wrangling, tables, and plots  
+```{r}
+#| message: false
+#| warning: false
+
+library(rnassqs)
+library(tidyverse)
+library(ggplot2)
+Api_key <- "51670BCE-B4FD-3F6C-B7BB-33A97347BEBD"
+```
+
+```{r results='hide'}
+#| message: false
+#| warning: false
+# test using example
+# Specify the query parameters
+params <- list(
+  sector_desc = "Animals & Products",
+  statisticcat_desc = "production",
+  unit_desc = "$"
+)
+
+# Check that our record request is under the 50,000 limit
+nassqs_auth(Api_key)
+nassqs_record_count(params)
+
+# Get the data
+Data <- suppressMessages(nassqs(params))
+ 
+ 
+# select columns that I need
+Data_2 <- Data %>%
+  dplyr::select(group_desc,
+                commodity_desc,
+                unit_desc,
+                state_name,
+                year,
+                Value
+                )
+
+head(Data_2)
+#Data_3  
+
+# I want to choose 
+# state_name, year, Value, CV (%),state_name,freq_desc,unit_desc,
+# class_desc,prodn_practice_desc,util_practice_desc,statisticcat_desc,unit_desc,short_desc,domain_desc,domaincat_desc,agg_level_desc,state_ansi,state_fips_code,state_alpha
+
+
+```
+```{r}
+# save data as csv
+write_csv(Data_2,
+          "../data/Animals & Products.csv"
+          )
+```
+
+# Instructions  
+1. Identify an open data in relation to your field of study. The minimum requirements for these data are:  
+  - It needs to be open (i.e., public data that anyone can access)  
+  - It needs to report some variable of importance across time (e.g., multiple days, months, years, etc.) and/or space (e.g., cities, counties, states, countries, etc.), ideally both.  
+  
+2. Bring these data into R, bonus points if you use an API for that (instead of manually)  
+
+3. Create 6 questions you can ask of these data. Of these questions:  
+  - At least 4 should require some wrangling to be answered (like a group_by and summarise, etc.)  
+  - At least 3 should be answered with a graph  
+
+# Questions  
+## 1. What is your field of study?  
+```{r}
+# My study is focusing on hyperspectral image of food products, but since the image data is kind of different with table data, I switch to the food products.
+
+```
+
+
+## 2. What is the open data you identified? Please explain it in terms of its source (website, which agency reported it), variable of importance, temporal and spatial characteristics, and anything else relevant for someone outside of your field of study to fully understand what it represents.  
+```{r}
+# The data I'm requesting is from United States Department of Agriculture(USDA) National Agricultural Statistics Service (NASS). link is below:
+# https://www.nass.usda.gov/developer/index.php
+
+# The package for this data is rnassqs. link is below:
+# https://cran.r-project.org/web/packages/rnassqs/vignettes/rnassqs.html
+
+
+# This initial data is very wide-ranged, so I need to specify these columns to narrow the range 
+#  sector_desc = "Animals & Products", Five high level, broad categories useful to narrow down choices (Crops, Animals & Products, Economics, Demographics, and Environmental).
+#  statisticcat_desc = "production", The aspect of a commodity being measured (e.g., AREA HARVESTED, PRICE RECEIVED, INVENTORY, SALES).
+#  unit_desc = "$", The unit associated with the statistic category (e.g., ACRES, $ / LB, HEAD, $, OPERATIONS).
+
+
+# After initial data cleaning, I select these columns:
+# group_desc: Subsets within sector (e.g., under sector = Crops, the groups are Field Crops, Fruit & Tree Nuts, Horticulture, and Vegetables). Here I already chose the "Animals & Products" sector.
+# commodity_desc: The primary subject of interest (e.g., CORN, CATTLE, LABOR, TRACTORS, OPERATORS).
+# state_name: name of the states.
+# year: The numeric year of the data.
+# Value: Published data value or suppression reason code. Since I specify the unit to $, here the value means the dollar value.
+```
+
+
+
+Create 6 questions you can ask of these data. Of these questions:  
+  - At least 4 should require some wrangling to be answered (like a group_by and summarise, etc.)  
+  - At least 3 should be answered with a graph  
+```{r}
+head(Data_2)
+```
+
+## 3. In 2005, which state has the highest production value?
+```{r}
+#| message: false
+#| warning: false
+Data3 <- Data_2 %>%
+  filter(year == 2005) %>%
+  # remove the na value under state_name column
+  filter(!is.na(state_name),
+         state_name != "",
+  # remove total,other, puerto rico under state_name column.
+         !state_name %in% c("US TOTAL",
+                            "OTHER STATES",
+                            "PUERTO RICO")) %>%
+  group_by(state_name) %>%
+  summarise(total_value = sum(Value, na.rm = TRUE))  %>%
+  arrange(desc(total_value))
+
+Data3
+```
+Answer: Texas has the highest production value.
+
+## 4. Sort production value in asscending order In GA state by group type?
+```{r}
+#| message: false
+#| warning: false
+
+Date4 <- Data_2 %>%
+  filter(state_name == "GEORGIA") %>%
+  group_by(group_desc) %>%
+  summarise(total_value = sum(Value, na.rm = TRUE)) %>%
+  arrange(total_value)
+
+Date4
+  
+```
+
+## 5. What is the total milk production value in Kansas from 2001 to 2006?
+```{r}
+#| message: false
+#| warning: false
+
+Data5 <- Data_2 %>%
+  filter(year >= 2001 & year <= 2006,
+         state_name == "KANSAS",
+         commodity_desc == "MILK"
+         ) %>%
+  summarise(total_value = sum(Value, na.rm = TRUE))
+
+Data5
+
+```
+Answer value of milk production in Kansas from 2001-2006 is 5086469000 dollars.
+
+## 6. In Arkansas, compare production values by group type in 2003 using a bar chart.
+```{r}
+#| message: false
+#| warning: false
+Data6 <- Data_2 %>%
+  filter(year == 2003,
+         state_name == "ARKANSAS",
+         ) %>%
+  group_by(group_desc) %>%
+  summarise(total_value = sum(Value, na.rm = TRUE))
+
+ggplot(data = Data6,
+       aes(x = group_desc,
+           y = total_value)
+       ) + 
+  geom_col(fill = "steelblue") +
+  labs(title = "Production Value by Group in Arkansas (2003)",
+       x = "Group Type",
+       y = "Production Value ($)") 
+
+
+
+```
+
+## 7. Draw the plot shows what is the average milk production value per year in California?
+```{r}
+#| message: false
+#| warning: false
+Data7 <- Data_2 %>%
+  filter(state_name=="CALIFORNIA",
+         commodity_desc == "MILK"
+         )  %>%
+  group_by(year) %>%
+  summarise(mean_value_per_year = mean(Value))
+
+ggplot(data = Data7,
+       aes(x = year,
+           y = mean_value_per_year)) +
+  geom_col(fill= "steelblue")  +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  labs(title = "Average Milk Production Value in California",
+       x = "Year",
+       y = "Production Value ($)") 
+  
+```
+## 8. In 2004, compare all TURKEYS and SHEEP type production values across states using a bar chart.
+```{r}
+#| message: false
+#| warning: false
+Data8 <- Data_2 %>% 
+  filter(year == 2004,
+         commodity_desc  %in%  c("TURKEYS","SHEEP"),
+         !is.na(state_name),
+         state_name != ""
+         ) %>%
+  group_by(state_name,commodity_desc) %>%
+  summarise(total_value = sum(Value, na.rm = TRUE))
+  
+  ggplot(data = Data8,
+         aes(x = state_name,
+             y = total_value,
+             fill = commodity_desc)) +
+  geom_col() + 
+  theme(axis.text.x = element_text(angle = 45, hjust = 1,size = 5)) + 
+  labs(title = "Cattle vs Sheep production value by state (2004)",
+       x = "State", y = "Total value")
+  
+  
+```
+
+# Submitting your work  
+Once you have developed all the code and answers, make sure to Render this quarto file.  
+
+**Notes on rendering**:  
+
+- Make sure to render your work and inspect how the final html look like.  
+- If it does not look professional for whatever reason, then fix the issue, re-render it, recheck.  
+- Only send me your work once your html file looks professional.  
+  - **DO NOT** delete the file's heading levels (# and ##). They set up the proper heading 1 and 2 levels, and I use them to guide my grading.  
+  - If a given chunk is also outputting warnings or messages, inhibit this behavior by changing the chunk options `message` and `warning` to `FALSE` (I'll demo this in a moment).  
+  
+  - If, after rendered, 2 lines of text are connected and you wish to "break line" between them, add 2 extra spaces after the first one (I'lld demo this in a moment).  
+
+After rendering, an .html file will be created on your `code` folder.  
+
+Rename this file to `Assignment-06-opendata-LASTNAME.html`.    
+
+For ex., mine would be `Assignment-06-opendata-Bastos.html`.
+
+Submit your work by uploading the **html** file to **eLC Assignment #6 - open data** by Monday March 16 11:59 pm.  
+  
+
+
+
+

@@ -20,6 +20,7 @@ library(readr) # to export csv
 library(nasapower) # for NASA POWER API
 library(purrr) # for mapping
 library(beepr) # for beep
+library(stringr)
 .libPaths()
 ```
 
@@ -39,11 +40,20 @@ glimpse(Trait)
 # 2) Open source data
 
 
-```{r}
-# get weather data based on year, site, lon, lat in meta data
+```{r test api }
+# get weather data from NASA Power based on year, site, lon, lat in meta data
 
-meta_unique <- Meta %>%
-  distinct(site, year, latitude, longitude)
+#meta_unique <- Meta %>%
+#  distinct(site, year, latitude, longitude)
+
+
+site_coord <- meta_cleaned %>%
+  group_by(site) %>%
+  summarise(
+    latitude = mean(latitude, na.rm = TRUE),
+    longitude = mean(longitude, na.rm = TRUE),
+    .groups = "drop"
+  )
 glimpse(meta_unique) 
 # Example of R api 
 #https://docs.ropensci.org/nasapower/articles/nasapower.htm
@@ -54,7 +64,7 @@ help(package = "nasapower")
 
 
 # test api
-weather <- get_power(
+weather_test <- get_power(
   community = "AG",   # agriculture
   lonlat = c(-83.4, 35.2),  # 经度, 纬度
   dates = c("2014-01-01", "2023-12-31"),
@@ -87,14 +97,26 @@ get_weather <- function(lon, lat, yr, site_name ) {
   )
   
   Sys.sleep(1)  # avoid be banned by api limit 
-
+   return(x) # return weather data frame
 }
 
 
 ```
 
+```{r test func}
+weather_test_func <- meta_unique %>% slice(1:5) %>%
+  mutate(
+    weather = pmap(
+      list(longitude, latitude, year, site),
+      ~ get_weather(..1, ..2, ..3, ..4)
+    )
+  ) %>%
+  tidyr::unnest(weather)
+
+```
+
 ```{r iteration}
-weather_summary <- meta_unique %>%
+weather_all_year <- meta_unique %>%
   mutate(
     weather = pmap(
       list(longitude, latitude, year, site),
@@ -105,44 +127,247 @@ weather_summary <- meta_unique %>%
  #beep
   beep()
 ```
+```{r check the number of site for each year}
+meta_unique %>%
+  count(year)
+```
 
+```{r save as csv}
+write_csv(weather_all_year, "../data/weather_raw.csv")
+```
 
 # 3) Data wrangling  
 
 ## On training data
-```{r intial }
-meta <- clean_names(Meta)
-soil <- clean_names(Soil)
-trait <- clean_names(Trait)
+```{r clean_names }
+meta_cleaned <- clean_names(Meta)
+soil_cleaned <- clean_names(Soil)
+trait_cleaned <- clean_names(Trait)
 
-glimpse(soil)
+glimpse(soil_cleaned)
 
 ```
 
-Merge three csv.
+Trying to merge three csv. But lots of problems on site-year. So we have to deal with it before merge.
+Different code plus num(e.g TXH1, TXH2), means they are different site, means different lan and lon.
 
-```{r Merge}
-# clean soil, seperate site-year
-soil_clean <- soil %>%
-  separate(site, into = c("site", "year"), sep = "_") %>%
+later suffix either lower case a/b or late/early(e.g "MOH1a", "MOH1-rep2") means different rep/block info, but doesn't affect the lan and lon info.
+
+```{r handling site-year}
+# clean soil, separate site-year
+soil_separate <- soil_cleaned %>%
+  # "_(?=[^_]+$)" means look for the last "_" from right side to do the separation.
+  separate(site, into = c("site", "year"), sep = "_(?=[^_]+$)") %>%
   mutate(year = as.integer(year))
 
+
+# trait,soil, and meta all have different site-year. check the number
+trait_key <- trait %>%
+  distinct(site, year)
+# 270 rows
+
+meta_key <- meta %>%
+  distinct(site, year)
+# 251 rows
+
+soil_key <- soil_separate %>%
+  distinct(site, year)
+# 186 keys
+
+
+# avoid many-to-many merge
+## check meta lat,lon base on site-year info
+meta_cleaned %>%
+  count(site, year) %>%
+  filter(n > 1)
+
+meta_check_site_year<-meta_cleaned %>%
+  group_by(site, year) %>%
+  summarise(n = n(),
+            n_distinct_lat = n_distinct(latitude),
+            n_distinct_lon = n_distinct(longitude))
+## lan and lon all same, so we can use distinct as long as they're are from same site code, even if the lan and lon differ slightly. But we have to choose one set of lan and lon from the same site code, to avoid the many-to-many merge problem.
+
+# average the lon and lat for the same site code
+meta_unique <- meta_cleaned %>%
+  group_by(site, year) %>%
+  summarise(
+    latitude = mean(latitude, na.rm = TRUE),
+    longitude = mean(longitude, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+# do the same to soil data
+soil_unique <- soil_separate %>%
+  group_by(site, year) %>%
+  summarise(
+    soilp_h = mean(soilp_h, na.rm = TRUE),
+    om_pct = mean(om_pct, na.rm = TRUE),
+    soilk_ppm = mean(soilk_ppm, na.rm = TRUE),
+    soilp_ppm = mean(soilp_ppm, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+# now we have the soil and meta data with distinct site year so that we can avoid that many-to-many problem when merge to trait data 
+
+# set same site for 3 csv
+
+# test regular expression
+sub("^([A-Za-z]+[0-9]+).*", "\\1",
+    c("TXH1-Late", "MOH1a", "MOH1-rep2", "IAH1"))
+#  "TXH1" "MOH1" "MOH1" "IAH1"
+
+trait2 <- trait %>%
+  rename(detailed_site = site) %>%
+  mutate(
+    site = detailed_site %>%
+    sub("^([A-Za-z]+[0-9]+).*", "\\1", x = .) # remove a/b/c,rep, later/early
+      
+  ) %>% 
+  # move to 3rd col
+  relocate(site, .after = detailed_site)
+
+# check trait2, row #943, IAH1a -> IAH1, it worked.
+# row # 49901 2017 TXH1-Early -> TXH1, it worked.
+
+```
+Now, we make the site clearly separate from detailed site in trait data.
+And we make site unique in meta and soil data.
+We can start merge.
+
+```{r  merged data & check }
+
 # merge
-data_merged <- trait %>%
-  left_join(Meta, by = c("site", "year")) %>%
-  left_join(soil_clean, by = c("site", "year"))
+data_merged <- trait2 %>%
+  left_join(meta_unique, by = c("site" = "site", "year" = "year")) %>%
+  left_join(soil_unique, by = c("site" = "site", "year" = "year"))
 
-glimpse(soil_clean)
+# check many-to-many problem
+nrow(trait2) == nrow(data_merged)
+# True means we did it right, there's no many-to-many problem happened.
+
+
+# overwrite with rep info in soil data
+soil_rep <- soil_separate %>%
+  mutate(
+    site_base = str_remove(site, "_\\d+$"),
+    rep_soil = as.integer(str_extract(site, "(?<=_)\\d+$"))
+  ) %>%
+  filter(!is.na(rep_soil)) %>%
+  select(site_base, year, rep_soil, soilp_h, om_pct, soilk_ppm, soilp_ppm)
+
+data_fix <- data_merged %>%
+  left_join(
+    soil_rep,
+    by = c("site" = "site_base", "year" = "year", "replicate" = "rep_soil"),
+    suffix = c("", "_rep")
+  )
+
+data_fix <- data_fix %>%
+  mutate(
+    soilp_h = coalesce(soilp_h_rep, soilp_h),
+    om_pct = coalesce(om_pct_rep, om_pct),
+    soilk_ppm = coalesce(soilk_ppm_rep, soilk_ppm),
+    soilp_ppm = coalesce(soilp_ppm_rep, soilp_ppm)
+  ) %>%
+  select(-ends_with("_rep"))
+# read the row#63403 &63404, the soil is different now. Means we give the different rep to trait data.
+
+# save as merged data
+write_csv(data_fix, "../data/training/training_merged.csv")
 ```
+This means we merge correctly, even though we lack some site-year info initially from meta and soil data. 
 
+Then we can do some data wrangling & feature engineering on weather data.
 
-```{r Check merged data }
-sum(is.na(data_merged$latitude))
-sum(is.na(data_merged$soilpH))
-
-```
 ## On weather data
-```{r daily to week }
+```{r read the data,check the site-year match }
+#check the distint site-year of weather
+weather <- read.csv("../data/weather_raw.csv")
+weather_unique_siteyear <- weather %>%
+  distinct(site, year) 
+# 251 rows
+
+#check the distint site-year of merged data
+data_merged <- read.csv("../data/training/training_merged.csv")
+train_data_unique_siteyear<-  data_merged %>%
+  distinct(site, year)
+# 264 rows
+
+# then we need to download again weather data about all the unique site 
+train_data_unique_site <- data_merged %>%
+  distinct(site, latitude,longitude)
+# 39 rows,
+# we need all these site across 2014-2023 years 
+site_coord <- data_merged %>%
+  group_by(site) %>%
+  summarise(
+    latitude = mean(latitude, na.rm = TRUE),
+    longitude = mean(longitude, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%  
+  # remove na lat and lon
+  filter(!is.na(latitude), !is.na(longitude))
+
+
+```
+
+
+```{r create a function}
+get_weather <- function(lon, lat, site_name) {
+  cat("Running:", site_name, "\n")
+  
+  x <- get_power(
+    community = "AG",
+    lonlat = c(lon, lat),
+    dates = c("2013-01-01", "2024-12-31"),
+    pars = c(
+      "T2M",
+      "T2M_MAX",
+      "T2M_MIN",
+      "PRECTOTCORR",
+      "ALLSKY_SFC_SW_DWN"
+    ),
+    temporal_api = "daily"
+  )
+  
+  x$site <- site_name
+  
+  Sys.sleep(0.5)
+  
+  return(x)
+}
+
+
+```
+
+```{r test func}
+weather_test_func <- site_coord %>%
+  slice(1:5) %>%
+  mutate(
+    weather = pmap(
+      list(longitude, latitude, site),
+      ~ get_weather(..1, ..2, ..3)
+    )
+  ) %>%
+  tidyr::unnest(weather)
+  #beep
+  beep()
+```
+
+```{r iteration}
+weather_raw <- pmap_dfr(
+  list(site_coord$longitude, site_coord$latitude, site_coord$site),
+  get_weather
+)
+  #beep
+  beep()
+  
+  # save data 
+  write_csv(weather_raw, "../data/weather_allsites_12years.csv")
+```
+
+```{r what is here? }
 
 
 ```
