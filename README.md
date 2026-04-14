@@ -17,8 +17,8 @@ This is the explanation about what we do and how we do on this final project.
 
 ## Feature engineering
 
-- 积温
-- 按周计算
+- Accumulative tem
+- Based on weekly
 
 ## Modeling Strategy
 
