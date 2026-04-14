@@ -1,7 +1,7 @@
 ---
 title: "Data Wrangling"
 format: html
-editor: Ming
+editor: Ming/Ishwari
 ---
 
 # 1) Setup  
