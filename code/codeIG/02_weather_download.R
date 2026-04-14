@@ -9,8 +9,8 @@ library(daymetr)
 
 # 2) Load merged data ----
 
-training_merged <- read_csv("data/training_merged.csv", show_col_types = FALSE)
-testing_merged  <- read_csv("data/testing_merged.csv",  show_col_types = FALSE)
+training_merged <- read_csv("data1/IGtraining_merged.csv", show_col_types = FALSE)
+testing_merged  <- read_csv("data1/IGtesting_merged.csv",  show_col_types = FALSE)
 
 
 # 3) Build site-year coordinate lookup table ----
@@ -100,4 +100,4 @@ daymet_long
 
 
 write_csv(daymet_long, "data1/weather_daily.csv")
-message("Script 02 complete. Daily weather saved to data/weather_daily.csv")
+message("Script 02 complete. Daily weather saved to data1/weather_daily.csv")

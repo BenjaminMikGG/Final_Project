@@ -145,7 +145,7 @@ glimpse(testing_merged)
 # 8) Export merged files ----
 # ============================================================
 
-write_csv(training_merged, "data/IGtraining_merged.csv")
-write_csv(testing_merged,  "data/IGtesting_merged.csv")
+write_csv(training_merged, "data1/IGtraining_merged.csv")
+write_csv(testing_merged,  "data1/IGtesting_merged.csv")
 
 message("Script 01 complete. Files saved to data1/")

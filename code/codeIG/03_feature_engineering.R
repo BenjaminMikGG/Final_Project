@@ -11,8 +11,8 @@ library(lubridate)
 # ============================================================
 
 weather_daily   <- read_csv("data1/weather_daily.csv",   show_col_types = FALSE)
-training_merged <- read_csv("data1/training_merged.csv", show_col_types = FALSE)
-testing_merged  <- read_csv("data1/testing_merged.csv",  show_col_types = FALSE)
+training_merged <- read_csv("data1/IGtraining_merged.csv", show_col_types = FALSE)
+testing_merged  <- read_csv("data1/IGtesting_merged.csv",  show_col_types = FALSE)
 
 glimpse(weather_daily)
 
@@ -154,7 +154,7 @@ testing_fe <- testing_merged %>%
 glimpse(testing_fe)
 
 
-# 8) Export feature-engineered datasets ----
+# 8) Export feature-engineered datasets 
 
 
 write_csv(training_fe, "data1/training_fe.csv")
