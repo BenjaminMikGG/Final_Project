@@ -235,7 +235,7 @@ Now, we make the site clearly separate from detailed site in trait data.
 And we make site unique in meta and soil data.
 We can start merge.
 
-```{r  merged data & check }
+```{r  merge data & check }
 
 # merge
 data_merged <- trait2 %>%
@@ -279,8 +279,63 @@ write_csv(data_fix, "../data/training/training_merged.csv")
 This means we merge correctly, even though we lack some site-year info initially from meta and soil data. 
 
 Then we can do some data wrangling & feature engineering on weather data.
+## On testing data
+We should do the same to testing data as to training data.
+```{r clean_names }
+test_soil_cleaned <- read_csv("../data/testing/testing_soil.csv") %>%
+  clean_names()
+test_meta_cleaned <- read_csv("../data/testing/testing_meta.csv") %>%
+  clean_names()
+test_submission_cleaned <- read_csv("../data/testing/testing_submission.csv") %>%
+  clean_names()
 
-## On weather data
+
+
+glimpse(test_soil_cleaned)
+
+```
+
+```{r separate year and site for soil and meta}
+test_soil_sep <- test_soil_cleaned %>%
+  # "_(?=[^_]+$)" means look for the last "_" from right side to do the separation.
+  separate(site, into = c("site", "year"), sep = "_(?=[^_]+$)") %>%
+  mutate(year = as.integer(year)) 
+
+# get unique site year, by average
+test_soil_sep2 <- test_soil_sep %>%
+  group_by(site, year) %>%
+  summarise(
+    soilp_h = mean(soilp_h, na.rm = TRUE),
+    soilk_ppm = mean(soilk_ppm, na.rm = TRUE),
+    soilp_ppm = mean(soilp_ppm, na.rm = TRUE),
+    om_pct = mean(om_pct, na.rm = TRUE),
+    .groups = "drop"
+  )
+# now it's 16 rows
+
+
+# test_meta all rows unique, so we don't need this step for test_meta
+
+
+```
+
+```{r merge & check}
+# merge
+test_data_merged <- test_submission_cleaned %>%
+  left_join(test_soil_sep2, by = c("site" = "site", "year" = "year")) %>%
+  left_join(test_meta_cleaned, by = c("site" = "site", "year" = "year"))
+# check many-to-many problem
+nrow(test_data_merged) == nrow(test_submission_cleaned)
+# True means we did it right, there's no many-to-many problem happened.
+
+ 
+# save as merged data
+write_csv(test_data_merged, "../data/testing/testing_merged.csv")
+```
+
+# 4) Feature engineering on weather data
+## Download again
+Based on updated view on the merged trait data, we have to download weather again for all the unique site-year across whole 2013-2024 12 years.
 ```{r read the data,check the site-year match }
 #check the distint site-year of weather
 weather <- read.csv("../data/weather_raw.csv")
@@ -366,8 +421,9 @@ weather_raw <- pmap_dfr(
   # save data 
   write_csv(weather_raw, "../data/weather_allsites_12years.csv")
 ```
-
-```{r what is here? }
+Until now, we get the new weather data, let's start feature engineering. 
+## Feature enineering
+```{r EDA for the training merged data }
 
 
 ```
