@@ -23,6 +23,7 @@ library(beepr) # for beep
 library(stringr)
 library(USAboundaries) # for US state boundaries
 library(sf) # for US map
+library(lubridate) # for date math
 .libPaths()
 ```
 
@@ -44,8 +45,9 @@ glimpse(Trait)
 # get weather data from NASA Power based on year, site, lon, lat in meta data
 
 meta_unique <- Meta %>%
-  distinct(site, year, latitude, longitude)
+  distinct(site, year, latitude, longitude, previous_crop)
 meta_cleaned <- clean_names(Meta)
+
 
 site_coord <- meta_cleaned %>%
   group_by(site) %>%
@@ -138,6 +140,8 @@ meta_unique %>%
 ```{r save as csv}
 write_csv(weather_all_year, "../data/weather_raw.csv")
 ```
+
+
 
 # 3) Data wrangling
 
@@ -435,9 +439,11 @@ weather_raw3<- pmap_dfr(
   write_csv(weather_raw3, "../data/weather_allsites_12years3.csv")
 ```
 
-Until now, we get the new weather data, let's start feature engineering. \## b. Feature enineering
 
-## b, EDA for train data
+
+Until now, we get the new weather data, let's start feature engineering.  
+
+## b. EDA for train data
 ```{r EDA for the training merged data }
 train_data <- read_csv("../data/training/training_merged.csv")
 weather <- read_csv("../data/weather_allsites_12years.csv")
@@ -733,6 +739,297 @@ write_csv(weather_stage_wide3,
 
 Now we have merged train data, merged test data, and weather wide data.
 
+## e. Repeat for weather test data
+But we find problems when move weather to test data. Because it's the weather for train data.
+
+We should have done this before, but since we just find out this problem on this stage, We'll put it here. It just repeats the process from 4)-c to 4)-d. 
+
+
+Stage dividing to test date. Basically same thing to test data.
+
+```{r  phenology info for test set}
+# phenology data frame
+pheno_date_test <- test_stage_base %>%
+  group_by(site, year) %>%
+  summarise(
+    date_planted = date_planted,
+    date_harvested = date_harvested ,
+    .groups = "drop"
+  )
+ pheno_date_test %>%
+  count(site, year, date_planted, date_harvested) %>%
+  arrange(site, year)
+# check the result to find out that in same site-year, harvest date might slightly changed 1-3days. This change is from rep and block difference, since this info is not provided in test data, so we decide to ignore it.
+ 
+# we choose the max dates for same site year, reason is harvest may last for couples of days.  
+ pheno_date_test2 <- pheno_date_test %>%
+  group_by(site, year) %>%
+  summarise(
+    date_planted = first(date_planted),
+    date_harvested = max(date_harvested, na.rm = TRUE),
+    .groups = "drop"
+  )
+# 23 rows
+
+```
+
+```{r filter out the doy of growth period in weather data}
+weather_test2 <- weather_test %>% 
+  clean_names() %>%
+  left_join(pheno_date_test2, by = c("site", "year")) %>%
+  filter(yyyymmdd >= date_planted & yyyymmdd <= date_harvested)
+# weather3: one row for one day, and start from plant date finish at harvest date for each site-year.
+weather_test2 %>%
+  distinct(site, year) %>%
+  nrow()
+# 23 rows
+anti_join(
+  pheno_date_test %>% distinct(site, year),
+  weather_test2 %>% distinct(site, year),
+  by = c("site", "year")
+)
+# 0
+```
+
+```{r divide into 10 staged based on quantile}
+# calculate the stage progress
+weather_test3 <- weather_test2 %>%
+  mutate(
+    season_length = as.numeric(date_harvested - date_planted),
+    dap = as.numeric(yyyymmdd - date_planted),
+    # dap:days after planting
+    progress = dap / season_length
+  )
+
+# create 10 stages
+weather_test4 <- weather_test3 %>%
+  mutate(
+    stage = cut(
+      progress,
+      breaks = seq(0, 1, by = 0.1),
+      include.lowest = TRUE,
+      labels = paste0("s", 1:10)
+    )
+  )
+
+
+
+```
+
+
+
+```{r calculate the GDD}
+# the reason of this is, corn is not growing under 10 degree, only growing from 10-30, not growing over 30 degree.
+weather_test5 <- weather_test4 %>%
+  mutate(
+    tmax_adj = pmin(t2m_max, 30),
+    tmin_adj = pmax(t2m_min, 10),
+    gdd = pmax(((tmax_adj + tmin_adj) / 2) - 10, 0)
+  )
+
+```
+
+```{r get weather feature based on stage}
+# group by stage
+weather_test_stage <- weather_test5 %>%
+  group_by(site, year, stage) %>%
+  summarise(
+    gdd = sum(gdd, na.rm = TRUE),
+    prcp = sum(prectotcorr, na.rm = TRUE),
+    rad  = sum(allsky_sfc_sw_dwn, na.rm = TRUE),
+    t2m  = mean(t2m, na.rm = TRUE),
+    t2max = max(t2m_max, na.rm =TRUE),
+    t2min = min(t2m_min, na.rm = TRUE),
+    .groups = "drop"
+  )
+```
+
+
+```{r weathre feature wide}
+weather_test_stage_wide <- weather_test_stage %>%
+  pivot_wider(
+    names_from = stage,
+    values_from = c(gdd, prcp, rad, t2m, t2max, t2min),
+    values_fill = 0
+  )
+# still the 23 rows, means the number of unique site-year, same rows
+```
+
+```{r feature refinement for weather_test_stage_wide}
+weather_test_stage_wide2 <- weather_test_stage_wide %>%
+  rowwise() %>%
+  mutate(
+    # add total gdd, percipitation, radiation across 10 stages.
+    total_gdd  = sum(c_across(gdd_s1:gdd_s10), na.rm = TRUE),
+    total_prcp = sum(c_across(prcp_s1:prcp_s10), na.rm = TRUE),
+    total_rad  = sum(c_across(rad_s1:rad_s10), na.rm = TRUE),
+    # add tem mean, max, min across 10 stages.
+    avg_t2m    = mean(c_across(t2m_s1:t2m_s10), na.rm = TRUE),
+
+    max_t2max  = max(c_across(t2max_s1:t2max_s10), na.rm = TRUE),
+    min_t2min  = min(c_across(t2min_s1:t2min_s10), na.rm = TRUE),
+    
+    # do more stages sparation like 3 stages: early, mid and late.
+    # here is gdd
+    gdd_early  = sum(c_across(gdd_s1:gdd_s3), na.rm = TRUE),
+    gdd_mid    = sum(c_across(gdd_s4:gdd_s7), na.rm = TRUE),
+    gdd_late   = sum(c_across(gdd_s8:gdd_s10), na.rm = TRUE),
+    # do prcp also
+    prcp_early = sum(c_across(prcp_s1:prcp_s3), na.rm = TRUE),
+    prcp_mid   = sum(c_across(prcp_s4:prcp_s7), na.rm = TRUE),
+    prcp_late  = sum(c_across(prcp_s8:prcp_s10), na.rm = TRUE)
+  ) %>%
+  ungroup()
+
+```
+
+```{r save weather stage test}
+write_csv(weather_test_stage_wide2,
+          "../data/weather_test_stage_wide.csv")
+```
+
+## f. Add growth period to test data
+```{r add test growth period}
+
+# the weather wide range has been filter by growth of train, so we have to use raw 2024 year data for test data
+test_mer <- read_csv("../data/testing/testing_merged.csv")
+train_mer <- read_csv("../data/training/training_merged.csv")
+weather_raw<- read_csv("../data/weather_allsites_12years.csv") %>%
+  clean_names()
+
+# use train data to reverse create growth period for test data
+# the plant and harvest time mostly depend on site, rather than hybrid.
+site_stage_info <- train_mer %>%
+  mutate(
+    date_planted   = mdy(date_planted),
+    date_harvested = mdy(date_harvested),
+    plant_doy      = yday(date_planted),
+    harvest_doy    = yday(date_harvested)
+  ) %>%
+  group_by(site) %>%
+  summarise(
+    plant_doy_mean   = round(mean(plant_doy, na.rm = TRUE)),
+    harvest_doy_mean = round(mean(harvest_doy, na.rm = TRUE)),
+    .groups = "drop"
+  )
+
+# add plant and harvest to test 
+test_stage_base <- test_mer %>%
+  left_join(site_stage_info, by = "site") %>%
+  mutate(
+    date_planted = as.Date(plant_doy_mean - 1,
+                           origin = paste0(year, "-01-01")),
+    date_harvested = as.Date(harvest_doy_mean - 1,
+                             origin = paste0(year, "-01-01"))
+  )
+
+# check the site didn't added by missing
+test_stage_base %>%
+  filter(is.na(plant_doy_mean) | is.na(harvest_doy_mean)) %>%
+  distinct(site)
+# ONH3 got missing.
+
+test_stage_base %>%
+  count(site) %>%
+  mutate(prop = n / sum(n)) %>%
+  arrange(desc(prop))
+# ONH3 take up 4.2% of whole  data. So we can't ignore it.
+
+# ONH3 never shows in train files.
+site_ONH3 <- test_stage_base %>%
+  filter(site == "ONH3") %>%
+  distinct(site,latitude,longitude)
+# 45.38412,75.7129
+
+```
+```{r prepare for download }
+site_coord_test <- test_stage_base %>%
+  group_by(site) %>%
+  summarise(
+    latitude = mean(latitude, na.rm = TRUE),
+    longitude = mean(longitude, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%  
+  # remove na lat and lon
+  filter(!is.na(latitude), !is.na(longitude))
+```
+
+```{r download test weather data}
+weather_test<- pmap_dfr(
+  list(site_coord_test$longitude, site_coord_test$latitude, site_coord_test$site),
+  get_weather
+)
+  #beep
+  beep()
+  
+  # save data 
+  write_csv(weather_test, "../data/weather_test.csv")
+```
+Then we need to do the same steps to test data as what we do to train data.
+But there's one problem, we assume the plant and growth based on site info, but ONH3 never shows in train data set. Notice:
+DEH1 → Delaware
+GAH1 → Georgia
+IAH1 → Iowa
+INH1 → Indiana
+MNH1 → Minnesota
+MOH1 → Missouri
+NCH1 → North Carolina
+NEH1 → Nebraska
+NYH1 → New York
+ONH1 → Ohio
+So we can only assume ONH3 in ohio, and same plant time in same state.And there OHH1 shows both in train and test set. Let's make this to ONH3
+
+```{r populate the growth date for test}
+
+site_stage_info <- train_mer %>%
+  mutate(
+    date_planted = mdy(date_planted),
+    date_harvested = mdy(date_harvested),
+    plant_doy = yday(date_planted),
+    harvest_doy = yday(date_harvested)
+  ) %>%
+  group_by(site) %>%
+  summarise(
+    plant_doy_mean = round(mean(plant_doy, na.rm = TRUE)),
+    harvest_doy_mean = round(mean(harvest_doy, na.rm = TRUE)),
+    .groups = "drop"
+  )
+
+oh_stage_info <- train_mer %>%
+  filter(site == "OHH1") %>%
+  mutate(
+    date_planted = mdy(date_planted),
+    date_harvested = mdy(date_harvested),
+    plant_doy = yday(date_planted),
+    harvest_doy = yday(date_harvested)
+  ) %>%
+  summarise(
+    plant_doy_oh = round(mean(plant_doy, na.rm = TRUE)),
+    harvest_doy_oh = round(mean(harvest_doy, na.rm = TRUE))
+  )
+
+test_stage_base <- test_mer %>%
+  left_join(site_stage_info, by = "site") %>%
+  mutate(
+    plant_doy_final = case_when(
+      site == "ONH3" & is.na(plant_doy_mean) ~ oh_stage_info$plant_doy_oh,
+      TRUE ~ plant_doy_mean
+    ),
+    harvest_doy_final = case_when(
+      site == "ONH3" & is.na(harvest_doy_mean) ~ oh_stage_info$harvest_doy_oh,
+      TRUE ~ harvest_doy_mean
+    ),
+    date_planted = as.Date(plant_doy_final - 1, origin = paste0(year, "-01-01")),
+    date_harvested = as.Date(harvest_doy_final - 1, origin = paste0(year, "-01-01"))
+  )
+test_stage_base %>%
+  filter(site == "ONH3") %>%
+  select(site, year, date_planted, date_harvested) %>%
+  distinct()
+
+ # save data 
+  write_csv(test_stage_base, "../data/testing/test_stage_base.csv")
+```
 
 # 5) Final check before train model
 We can start train model at this stage, but we may check the data so that we can decide the further direction. or whether we need to do more data wrangling about the current dataset.
@@ -740,64 +1037,88 @@ We can start train model at this stage, but we may check the data so that we can
 ## a. Check all 3 csv files
 ```{r check 3 csv files}
 train_mer <- read_csv("../data/training/training_merged.csv")
-test_mer <- read_csv("../data/testing/testing_merged.csv")
-weather_stage_wide <- read_csv("../data/weather_stage_wide.csv")
+# 164k rows, 17 cols
+test_mer <- read_csv("../data/testing/test_stage_base.csv")
+# 10k rows, 17 cols
 
-colnames(train_mer)
-colnames(test_mer)
-colnames(weather_stage_wide)
+weather_train_fe <- read_csv("../data/weather_stage_wide.csv")
+# 262 rows, 74 cols
+weather_test_fe <- read_csv("../data/weather_test_stage_wide.csv")
+# 23 rows, 74 cols
 
+# Let's see the difference in two merged data.
 setdiff(names(train_mer), names(test_mer))
 # so we don't have these cols in test data
-#"detailed_site"  "replicate"      "block"          "date_planted"  
-#[5] "date_harvested" "grain_moisture"
+# [1] "detailed_site"  "replicate"      "block"          "grain_moisture"
 
 setdiff(names(test_mer), names(train_mer))
-
+# [1] "plant_doy_mean"    "harvest_doy_mean"  "plant_doy_final"  
+# [4] "harvest_doy_final"
  
 ```
 ```{r select cols for train and test data}
 train_mer2 <- train_mer %>%
-  dplyr::select(-detailed_site, -replicate, -block,-date_planted,-date_harvested,-grain_moisture)
+  dplyr::select(-detailed_site, 
+                -replicate, 
+                -block,
+                -date_planted,
+                -date_harvested,
+                -grain_moisture,
+                -latitude,
+                -longitude,)
 # we do the GDD and stage stuff, so let's remove plant and harvest date.
 # rep and block not in the test, only depend on site name, remove.
 # what about moisture, it's also predicted values of corn grain, not in the soil. remove.
+# what about lon and lat? We have the weather according to site, so remove.
+
+# let's keep same cols for test merged data
+test_mer2 <- test_mer %>%
+  dplyr::select(-plant_doy_mean,
+                -harvest_doy_mean,
+                -plant_doy_final,
+                -harvest_doy_final,
+                -latitude,
+                -longitude,
+                -date_harvested,
+                -date_planted)
 
 setdiff(names(train_mer2), names(test_mer)) 
 # no col difference now. Finally!
 ```
-```{r check NA data}
-colMeans(is.na(train_mer2))
-colMeans(is.na(test_mer))
-```
-## b. Conclusion before training
-Because the soil missing NA is bit higher (around 30%), we may consider just remove these col to see how it affect the prediction. We can try keep them at first place. So now we have 2 different train features(cols) before we train.
-Plan 1: weather_stage_wide. That means we have everything but sum of radiation.
-Plan 2: weather_stage_wide2, add radiation cols.
-Plan 3: remove all soil cols.
-Let's try from the plan 1.
 
-```{r move weather to train and test data}
+```{r move weather to merged data}
 train_final <- train_mer2 %>%
-  left_join(weather_stage_wide, by = c("site", "year"))
-# no more rows, 83 cols, means good!
+  left_join(weather_train_fe, by = c("site", "year"))
+# no more rows, 81 cols, means good!
+
+test_final <- test_mer2 %>%
+  left_join(weather_test_fe, by = c("site", "year"))
+# no more rows, 81 cols, means good!
+
+```
 
 
-test_final <- test_mer %>%
-  left_join(weather_stage_wide, by = c("site", "year"))
-# same, 83 cols, means good!
 
+## b. Export files.
+```{r Export files}
 # let's save 
 write_csv(train_final,
           "../data/training/train_final.csv")
 saveRDS(train_final, "../data/training/train_final.rds")
 
-write_csv(test_final,
-          "../data/testing/test_final.csv")
 
 # to read rds file.
 train_final2 <- readRDS("../data/training/train_final.rds")
 # checked, it's compressed into rds file to reduce the size of train file.
 
+
+# save test data
+write_csv(test_final,
+          "../data/testing/test_final.csv")
+
 ```
 
+So,
+train_final.rds
+test_final.csv 
+will be our last 2 files.

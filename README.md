@@ -7,18 +7,22 @@ This is the explanation about what we do and how we do on this final project.
 # The Procedure of whole process
 
 ## Getting open source data
-
 - weather data
-  - source：NAOO
+  - source：NAOO(globally, cover the site in europe)
+  - download based on lat and lon info in meta data
 
 ## Data Wrangling
-
 - format cleaning
+- year and site separation
+- avoid many-to-many merging problem
+- merge soil and meta to trait data
 
 ## Feature engineering
+- Using date after plant(pad) to calculate the stage of growth
+- GDD for corn
+- Sum of percipitation,radiation,tmean/min/max
+- Calculate every feature based on stage of growth
 
-- Accumulative tem
-- Based on weekly
 
 ## Modeling Strategy
 
