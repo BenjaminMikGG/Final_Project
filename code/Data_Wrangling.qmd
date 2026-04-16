@@ -31,22 +31,20 @@ getwd() #get your working directory
 Meta <- read_csv("../data/training/training_meta.csv")
 Soil <- read_csv("../data/training/training_soil.csv")
 Trait <- read_csv("../data/training/training_trait.csv")
-
+Meta <- read_csv("../data/training/training_meta.csv")
 glimpse(Meta)
 glimpse(Soil)
 glimpse(Trait)
 
 ```
 
-
 # 2) Open source data
-
 
 ```{r test api }
 # get weather data from NASA Power based on year, site, lon, lat in meta data
 
-#meta_unique <- Meta %>%
-#  distinct(site, year, latitude, longitude)
+meta_unique <- Meta %>%
+  distinct(site, year, latitude, longitude)
 meta_cleaned <- clean_names(Meta)
 
 site_coord <- meta_cleaned %>%
@@ -81,6 +79,7 @@ weather_test <- get_power(
 
 glimpse(weather) 
 ```
+
 ```{r create a function}
 get_weather <- function(lon, lat, yr, site_name ) {
   cat("Running:", site_name, yr, "\n")
@@ -117,7 +116,7 @@ weather_test_func <- meta_unique %>% slice(1:5) %>%
 
 ```
 
-```{r iteration eval=FALSE} 
+```{r iteration eval=FALSE}
 #After downloading it, eval=FALSE this chunk.
 weather_all_year <- meta_unique %>%
   mutate(
@@ -130,6 +129,7 @@ weather_all_year <- meta_unique %>%
  #beep
   beep()
 ```
+
 ```{r check the number of site for each year}
 meta_unique %>%
   count(year)
@@ -139,9 +139,10 @@ meta_unique %>%
 write_csv(weather_all_year, "../data/weather_raw.csv")
 ```
 
-# 3) Data wrangling  
+# 3) Data wrangling
 
 ## a. On training data
+
 ```{r clean_names }
 meta_cleaned <- clean_names(Meta)
 soil_cleaned <- clean_names(Soil)
@@ -151,8 +152,7 @@ glimpse(soil_cleaned)
 
 ```
 
-Trying to merge three csv. But lots of problems on site-year. So we have to deal with it before merge.
-Different code plus num(e.g TXH1, TXH2), means they are different site, means different lan and lon.
+Trying to merge three csv. But lots of problems on site-year. So we have to deal with it before merge. Different code plus num(e.g TXH1, TXH2), means they are different site, means different lan and lon.
 
 later suffix either lower case a/b or late/early(e.g "MOH1a", "MOH1-rep2") means different rep/block info, but doesn't affect the lan and lon info.
 
@@ -165,11 +165,11 @@ soil_separate <- soil_cleaned %>%
 
 
 # trait,soil, and meta all have different site-year. check the number
-trait_key <- trait %>%
+trait_key <- trait_cleaned %>%
   distinct(site, year)
 # 270 rows
 
-meta_key <- meta %>%
+meta_key <- meta_cleaned %>%
   distinct(site, year)
 # 251 rows
 
@@ -197,8 +197,10 @@ meta_unique <- meta_cleaned %>%
   summarise(
     latitude = mean(latitude, na.rm = TRUE),
     longitude = mean(longitude, na.rm = TRUE),
+    previous_crop = first(previous_crop),
     .groups = "drop"
   )
+
 
 # do the same to soil data
 soil_unique <- soil_separate %>%
@@ -220,7 +222,7 @@ sub("^([A-Za-z]+[0-9]+).*", "\\1",
     c("TXH1-Late", "MOH1a", "MOH1-rep2", "IAH1"))
 #  "TXH1" "MOH1" "MOH1" "IAH1"
 
-trait2 <- trait %>%
+trait2 <- trait_cleaned %>%
   rename(detailed_site = site) %>%
   mutate(
     site = detailed_site %>%
@@ -234,9 +236,8 @@ trait2 <- trait %>%
 # row # 49901 2017 TXH1-Early -> TXH1, it worked.
 
 ```
-Now, we make the site clearly separate from detailed site in trait data.
-And we make site unique in meta and soil data.
-We can start merge.
+
+Now, we make the site clearly separate from detailed site in trait data. And we make site unique in meta and soil data. We can start merge.
 
 ```{r  merge data & check }
 
@@ -279,11 +280,17 @@ data_fix <- data_fix %>%
 # save as merged data
 write_csv(data_fix, "../data/training/training_merged.csv")
 ```
-This means we merge correctly, even though we lack some site-year info initially from meta and soil data. 
 
-Then we can do some data wrangling & feature engineering on weather data.
-## b. On testing data
+
+
+This means we merge correctly, even though we lack some site-year info initially from meta and soil data.
+
+Then we can do some data wrangling & feature engineering on weather data. 
+
+## b. On testing data 
+
 We should do the same to testing data as to training data.
+
 ```{r clean_names }
 test_soil_cleaned <- read_csv("../data/testing/testing_soil.csv") %>%
   clean_names()
@@ -337,8 +344,11 @@ write_csv(test_data_merged, "../data/testing/testing_merged.csv")
 ```
 
 # 4) Feature engineering on weather data
+
 ## a. Download weather data again
+
 Based on updated view on the merged trait data, we have to download weather again for all the unique site-year across whole 2013-2024 12 years.
+
 ```{r read the data,check the site-year match }
 #check the distint site-year of weather
 weather <- read.csv("../data/weather_raw.csv")
@@ -369,7 +379,6 @@ site_coord <- data_merged %>%
 
 
 ```
-
 
 ```{r create a function}
 get_weather <- function(lon, lat, site_name) {
@@ -425,8 +434,10 @@ weather_raw3<- pmap_dfr(
   # save data 
   write_csv(weather_raw3, "../data/weather_allsites_12years3.csv")
 ```
-Until now, we get the new weather data, let's start feature engineering. 
-## b. Feature enineering
+
+Until now, we get the new weather data, let's start feature engineering. \## b. Feature enineering
+
+## b, EDA for train data
 ```{r EDA for the training merged data }
 train_data <- read_csv("../data/training/training_merged.csv")
 weather <- read_csv("../data/weather_allsites_12years.csv")
@@ -442,19 +453,22 @@ field <- train_data %>%
 summary(train_data)
 summary(weather)
 ```
-How many rows for weather? 
-38 unique sites × 4383 days(3 leap years) = 166,554 rows
 
-What is the statistical distribution of fiber strength?  
+How many rows for weather? 38 unique sites × 4383 days(3 leap years) = 166,554 rows
+
+What is the statistical distribution of fiber strength?
+
 ```{r yield statistical distribution}
 ggplot(data = train_data,
        aes(x = yield_mg_ha)
        ) + 
   geom_density()
 ```
+
 Train data is nearly normal distributed, a slightly right skewed.
 
 What's site location?
+
 ```{r  show on map }
 states <- us_states() %>%
   filter(!(state_abbr %in% c("PR","AK","HI")))
@@ -473,7 +487,9 @@ ggplot() +
 
 ```
 
-Let's create some density plots to explore the weather data distributions.  
+## c. EDA for weather
+Let's create some density plots to explore the weather data distributions.
+
 ```{r EDA for weather data}
 
 weather2 <- weather %>%
@@ -483,21 +499,21 @@ weather2 <- weather %>%
   facet_wrap(~name, scales = "free") 
 weather2
 ```
-On weather data, we have radiation, precipitation, temp mean, min and max. And we have the plant and harvest date on training data.
-There are **two components** that we can consider when feature engineering weather data:  
-1. Summarizing time **window size**  
-  - Weekly  ✅
-  - Monthly  
-  - Every 2 months  
-  - Growing season  ✅
-  - Based on crop growth stages  ✅
-  
-2. Summarizing **function**  
-  - Mean  ✅
-  - Sum ✅
-  - Standard deviation  
-  
+
+On weather data, we have radiation, precipitation, temp mean, min and max. And we have the plant and harvest date on training data. There are **two components** that we can consider when feature engineering weather data:\
+1. Summarizing time **window size**\
+- Weekly ✅ - Monthly\
+- Every 2 months\
+- Growing season ✅ - Based on crop growth stages ✅
+
+2.  Summarizing **function**\
+
+-   Mean ✅
+-   Sum ✅
+-   Standard deviation
+
 Before we decide, let's check the plant and harvest date.
+
 ```{r check plant and harvest date}
 train_data <- read_csv("../data/training/training_merged.csv")
 
@@ -511,20 +527,16 @@ train_data2 <- train_data %>%
 train_data2
 
 ```
-Notice every site-year plant/harvest at different date, and the period of growth also different. So we decide to use relative growth period as the time scale for feature engineering on weather data. So we can set **10 quantile stages**  for corn.
 
-Get these values for every stage:
-**GDD**  , Growing Degree Days: GDD = ((Tmax + Tmin) / 2) - Tbase
-For corn, let's set: 
-Tbase = 10°C
-Tmax cap = 30°C 
-Tmin floor = 10°C
+Notice every site-year plant/harvest at different date, and the period of growth also different. So we decide to use relative growth period as the time scale for feature engineering on weather data. So we can set **10 quantile stages** for corn.
 
-**sum of radiation**  
+Get these values for every stage: **GDD** , Growing Degree Days: GDD = ((Tmax + Tmin) / 2) - Tbase For corn, let's set: Tbase = 10°C Tmax cap = 30°C Tmin floor = 10°C
 
-**sum of precipitation**  
+**sum of radiation**
 
-**mean of T2M/max/min**  
+**sum of precipitation**
+
+**mean of T2M/max/min**
 
 ```{r  phenology info}
 # phenology data frame
@@ -572,6 +584,7 @@ anti_join(
 )
 # These two site-year do not have correct lat and lon info: NYH1 in 2015, TXH4 in 2019.
 ```
+
 ```{r divide into 10 staged based on quantile}
 # calculate the stage progress
 weather3 <- weather3 %>%
@@ -597,8 +610,14 @@ weather3 <- weather3 %>%
 
 ```
 
-Finally we can calculate the GDD now based on the growing stage.
-**GDD**  , Growing Degree Days: GDD = ((Tmax + Tmin) / 2) - Tbase
+```{r save weather stage}
+write_csv(weather3,
+          "../data/weather_stage.csv")
+```
+
+
+Finally we can calculate the GDD now based on the growing stage. **GDD** , Growing Degree Days: GDD = ((Tmax + Tmin) / 2) - Tbase
+
 ```{r calculate the GDD}
 # the reason of this is, corn is not growing under 10 degree, only growing from 10-30, not growing over 30 degree.
 weather4 <- weather3 %>%
@@ -619,23 +638,166 @@ weather_stage <- weather4 %>%
     prcp = sum(prectotcorr, na.rm = TRUE),
     rad  = sum(allsky_sfc_sw_dwn, na.rm = TRUE),
     t2m  = mean(t2m, na.rm = TRUE),
+    t2max = max(t2m_max, na.rm =TRUE),
+    t2min = min(t2m_min, na.rm = TRUE),
     .groups = "drop"
   )
 ```
+
 
 ```{r weathre feature wide}
 weather_stage_wide <- weather_stage %>%
   pivot_wider(
     names_from = stage,
-    values_from = c(gdd, prcp, rad, t2m),
+    values_from = c(gdd, prcp, rad, t2m, t2max, t2min),
     values_fill = 0
   )
-# still the 262 rows, means the number of unique site-year 
+# still the 262 rows, means the number of unique site-year, same rows
 ```
 
-## 5) Exporting
-```{r}
-write_csv(weather_stage_wide,
+
+
+## d. Feature refinement
+Now we have stage wide weather data, but we could do more like get the sum of gdd across whole growth period, which means the sum of 10 stages.
+```{r feature refinement }
+weather_stage_wide2 <- weather_stage_wide %>%
+  rowwise() %>%
+  mutate(
+    # add total gdd, percipitation, radiation across 10 stages.
+    total_gdd  = sum(c_across(gdd_s1:gdd_s10), na.rm = TRUE),
+    total_prcp = sum(c_across(prcp_s1:prcp_s10), na.rm = TRUE),
+    total_rad  = sum(c_across(rad_s1:rad_s10), na.rm = TRUE),
+    # add tem mean, max, min across 10 stages.
+    avg_t2m    = mean(c_across(t2m_s1:t2m_s10), na.rm = TRUE),
+
+    max_t2max  = max(c_across(t2max_s1:t2max_s10), na.rm = TRUE),
+    min_t2min  = min(c_across(t2min_s1:t2min_s10), na.rm = TRUE),
+    
+    # do more stages sparation like 3 stages: early, mid and late.
+    # here is gdd
+    gdd_early  = sum(c_across(gdd_s1:gdd_s3), na.rm = TRUE),
+    gdd_mid    = sum(c_across(gdd_s4:gdd_s7), na.rm = TRUE),
+    gdd_late   = sum(c_across(gdd_s8:gdd_s10), na.rm = TRUE),
+    # do prcp also
+    prcp_early = sum(c_across(prcp_s1:prcp_s3), na.rm = TRUE),
+    prcp_mid   = sum(c_across(prcp_s4:prcp_s7), na.rm = TRUE),
+    prcp_late  = sum(c_across(prcp_s8:prcp_s10), na.rm = TRUE)
+  ) %>%
+  ungroup()
+
+```
+
+```{r  more weather feature plans}
+# We ignore the sum of radiation of 3 stages last chunk. Because it might now as important as the prcp and gdd. We can put this into another file, and see the result difference when training model.
+weather_stage_wide3 <- weather_stage_wide %>%
+  rowwise() %>%
+  mutate(
+    # add total gdd, percipitation, radiation across 10 stages.
+    total_gdd  = sum(c_across(gdd_s1:gdd_s10), na.rm = TRUE),
+    total_prcp = sum(c_across(prcp_s1:prcp_s10), na.rm = TRUE),
+    total_rad  = sum(c_across(rad_s1:rad_s10), na.rm = TRUE),
+    # add tem mean, max, min across 10 stages.
+    avg_t2m    = mean(c_across(t2m_s1:t2m_s10), na.rm = TRUE),
+
+    max_t2max  = max(c_across(t2max_s1:t2max_s10), na.rm = TRUE),
+    min_t2min  = min(c_across(t2min_s1:t2min_s10), na.rm = TRUE),
+    
+    # do more stages sparation like 3 stages: early, mid and late.
+    # here is gdd
+    gdd_early  = sum(c_across(gdd_s1:gdd_s3), na.rm = TRUE),
+    gdd_mid    = sum(c_across(gdd_s4:gdd_s7), na.rm = TRUE),
+    gdd_late   = sum(c_across(gdd_s8:gdd_s10), na.rm = TRUE),
+    # do prcp also
+    prcp_early = sum(c_across(prcp_s1:prcp_s3), na.rm = TRUE),
+    prcp_mid   = sum(c_across(prcp_s4:prcp_s7), na.rm = TRUE),
+    prcp_late  = sum(c_across(prcp_s8:prcp_s10), na.rm = TRUE),
+    # do rad also
+    rad_early = sum(c_across(rad_s1:rad_s3), na.rm = TRUE),
+    rad_mid   = sum(c_across(rad_s4:rad_s7), na.rm = TRUE),
+    rad_late  = sum(c_across(rad_s8:rad_s10), na.rm = TRUE)
+  ) %>%
+  ungroup()
+
+```
+
+
+```{r Exporting weather wide}
+write_csv(weather_stage_wide2,
           "../data/weather_stage_wide.csv")
+```
+
+```{r Exporting weather wide-plan2}
+write_csv(weather_stage_wide3,
+          "../data/weather_stage_wide_plan2.csv")
+```
+
+Now we have merged train data, merged test data, and weather wide data.
+
+
+# 5) Final check before train model
+We can start train model at this stage, but we may check the data so that we can decide the further direction. or whether we need to do more data wrangling about the current dataset.
+
+## a. Check all 3 csv files
+```{r check 3 csv files}
+train_mer <- read_csv("../data/training/training_merged.csv")
+test_mer <- read_csv("../data/testing/testing_merged.csv")
+weather_stage_wide <- read_csv("../data/weather_stage_wide.csv")
+
+colnames(train_mer)
+colnames(test_mer)
+colnames(weather_stage_wide)
+
+setdiff(names(train_mer), names(test_mer))
+# so we don't have these cols in test data
+#"detailed_site"  "replicate"      "block"          "date_planted"  
+#[5] "date_harvested" "grain_moisture"
+
+setdiff(names(test_mer), names(train_mer))
+
+ 
+```
+```{r select cols for train and test data}
+train_mer2 <- train_mer %>%
+  dplyr::select(-detailed_site, -replicate, -block,-date_planted,-date_harvested,-grain_moisture)
+# we do the GDD and stage stuff, so let's remove plant and harvest date.
+# rep and block not in the test, only depend on site name, remove.
+# what about moisture, it's also predicted values of corn grain, not in the soil. remove.
+
+setdiff(names(train_mer2), names(test_mer)) 
+# no col difference now. Finally!
+```
+```{r check NA data}
+colMeans(is.na(train_mer2))
+colMeans(is.na(test_mer))
+```
+## b. Conclusion before training
+Because the soil missing NA is bit higher (around 30%), we may consider just remove these col to see how it affect the prediction. We can try keep them at first place. So now we have 2 different train features(cols) before we train.
+Plan 1: weather_stage_wide. That means we have everything but sum of radiation.
+Plan 2: weather_stage_wide2, add radiation cols.
+Plan 3: remove all soil cols.
+Let's try from the plan 1.
+
+```{r move weather to train and test data}
+train_final <- train_mer2 %>%
+  left_join(weather_stage_wide, by = c("site", "year"))
+# no more rows, 83 cols, means good!
+
+
+test_final <- test_mer %>%
+  left_join(weather_stage_wide, by = c("site", "year"))
+# same, 83 cols, means good!
+
+# let's save 
+write_csv(train_final,
+          "../data/training/train_final.csv")
+saveRDS(train_final, "../data/training/train_final.rds")
+
+write_csv(test_final,
+          "../data/testing/test_final.csv")
+
+# to read rds file.
+train_final2 <- readRDS("../data/training/train_final.rds")
+# checked, it's compressed into rds file to reduce the size of train file.
+
 ```
 
