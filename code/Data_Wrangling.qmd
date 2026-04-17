@@ -1086,16 +1086,94 @@ setdiff(names(train_mer2), names(test_mer))
 # no col difference now. Finally!
 ```
 
-```{r move weather to merged data}
-train_final <- train_mer2 %>%
+Let's separate the hybrid now.
+```{r handle hybrid}
+# divide into 2 cols
+train_mer3 <- train_mer2 %>%
+  separate(hybrid, into = c("parent1", "parent2"), sep = "/", remove = FALSE)
+
+test_mer3 <- test_mer2 %>%
+  separate(hybrid, into = c("parent1", "parent2"), sep = "/", remove = FALSE)
+
+n_distinct(train_mer3$hybrid)
+# 5027
+n_distinct(test_mer3$hybrid)
+# 1063
+
+# check the overlap between these two sets
+length(intersect(unique(train_mer3$hybrid), unique(test_mer3$hybrid)))
+# 104
+
+
+length(intersect(unique(train_mer3$parent1), unique(test_mer3$parent1)))
+# 93
+length(intersect(unique(train_mer3$parent2), unique(test_mer3$parent2)))
+# 19
+
+
+# how many in parent2 in test are seen in train
+test_flag_par2 <- test_mer3 %>%
+  mutate(
+    seen_in_train = parent2 %in% train_mer3$parent2
+  )
+mean(test_flag$seen_in_train)
+# 59%
+
+# what about parent1
+test_flag_par1 <- test_mer3 %>%
+  mutate(
+    seen_in_train = parent1 %in% train_mer3$parent1
+  ) 
+mean(test_flag_par1$seen_in_train)
+# 19%
+
+# what about hybrid
+test_flag_hyb <- test_mer3 %>%
+  mutate(
+    seen_in_train = hybrid %in% train_mer3$hybrid
+  ) 
+mean(test_flag_hyb$seen_in_train)
+# 12%
+
+
+# hybrid has more overlap then single parent breed, so let's still use hybrid, and make other hybrid to other/unknow（make every new hybrid into one hybrid
+
+# find the overlap hybrid
+common_par2 <- intersect(
+  unique(train_mer3$parent2),
+  unique(test_mer3$parent2)
+)
+# make common and other
+train_mer3 <- train_mer3 %>%
+  mutate(parent2 = if_else(parent2 %in% common_par2, parent2, "other"))
+
+test_mer3 <- test_mer3 %>%
+  mutate(parent2 = if_else(parent2 %in% common_par2, parent2, "other"))
+
+# delete original hybrid cols
+train_mer3 <- train_mer3 %>%
+  select(-hybrid, -parent1)
+  
+
+test_mer3 <- test_mer3 %>%
+  select(-hybrid, -parent1)
+
+
+```
+
+
+
+```{r merge weather to test/train data}
+train_final <- train_mer3 %>%
   left_join(weather_train_fe, by = c("site", "year"))
 # no more rows, 81 cols, means good!
 
-test_final <- test_mer2 %>%
+test_final <- test_mer3 %>%
   left_join(weather_test_fe, by = c("site", "year"))
 # no more rows, 81 cols, means good!
 
 ```
+
 
 
 
@@ -1115,6 +1193,7 @@ train_final2 <- readRDS("../data/training/train_final.rds")
 # save test data
 write_csv(test_final,
           "../data/testing/test_final.csv")
+
 
 ```
 

@@ -1,0 +1,390 @@
+---
+title: "XG-Boost_Training"
+format: html
+editor: Ming/Ishwari
+---
+
+# 1) Setup
+```{r}
+#| message: false
+#| warning: false
+library(finetune)     # Additional tuning strategies (e.g., racing, ANOVA-based tuning)
+library(vip)          # For plotting variable importance from fitted models
+library(xgboost)      # XGBoost implementation in R
+library(ranger)       # Fast implementation of Random Forests
+library(tidyverse)    # Data wrangling and visualization
+library(tidymodels)   # for func：initial_split
+library(doParallel)   # For parallel computing (useful during resampling/tuning)
+```
+
+
+```{r read train data}
+corn <- readRDS("../data/training/train_final.rds")
+head(corn)
+```
+
+# 2) ML workflow
+
+## 1. Pre-processing
+
+### a. Data split
+```{r corn_split}
+set.seed(123) # Setting seed to get reproducible results 
+corn_split <- initial_split(
+  corn, 
+  # proportion of split, more for test data set cuz we have lots of rows
+  prop = .65, 
+  strata = yield_mg_ha  # Stratify by target variable
+  )
+corn_split
+# <Training/Testing/Total>
+# <106908/57569/164477>
+```
+
+
+```{r corn_train}
+corn_train <- training(corn_split)  # 65% of data
+corn_train #This is your training data frame
+
+corn_test <- testing(corn_split)    # 35% of data
+corn_test
+
+```
+
+
+### b. Distribution of target variable
+
+```{r distribution}
+ggplot() +
+  geom_density(data = corn_train, 
+               aes(x = yield_mg_ha),
+               color = "red") +
+  geom_density(data = corn_test, 
+               aes(x = yield_mg_ha),
+               color = "blue") 
+  # almost perfect distribution
+```
+
+## 2. Data processing with recipe
+```{r corn_recipe}
+# Create recipe for data preprocessing
+corn_recipe <- recipe(yield_mg_ha ~ ., data = corn_train) %>% # Remove identifier columns and months 
+  step_rm(
+    year,       # Remove year identifier
+    site,        # Remove site identifier
+    hybrid,      #Remove hybrid, cuz too many cols 
+    parent1      #parent1
+  ) %>%
+  step_string2factor(parent2) %>%
+  step_unknown(parent2) %>%
+  step_unknown(previous_crop) %>%
+  step_other(parent2, threshold = 0.01, other = "rare")%>%
+  step_dummy(all_nominal_predictors())  # make cat to num for hybrid and pervious crop
+corn_recipe
+```
+
+```{r corn_prep}
+# Prep the recipe to estimate any required statistics
+corn_prep <- corn_recipe %>% 
+  prep()
+
+# Examine preprocessing steps
+corn_prep
+```
+
+## 3. Training
+
+### a. Model specification
+
+```{r xgb_spec}
+xgb_spec <- #Specifying XgBoost as our model type, asking to tune the hyperparameters
+  boost_tree(
+   # Total number of boosting iterations
+    trees = tune(),
+         # Maximum depth of each tree
+    tree_depth = tune(),
+             # Minimum samples required to split a node
+    min_n = tune(),
+        # Step size shrinkage for each boosting step
+    learn_rate = tune()
+    ) %>%
+        #specify engine 
+  set_engine("xgboost") %>%
+       # Set to mode
+  set_mode("regression")
+xgb_spec
+
+```
+
+
+### b. Cross-validation setup
+We use 10-fold cross-validation to evaluate model performance during tuning:
+```{r}
+set.seed(123)  
+resampling_foldcv <- vfold_cv(corn_train, # Create 10-fold cross-validation resampling object from training data
+                              v = 10)
+
+resampling_foldcv
+resampling_foldcv$splits[[1]]
+```
+### c. Hyperparameter grid with Latin Hypercube Sampling
+
+We use Latin hypercube sampling to generate a diverse grid of hyperparameter combinations:
+
+```{r }
+xgb_grid <- grid_latin_hypercube(
+  tree_depth(),
+  min_n(),
+  learn_rate(),
+  trees(),
+  # 10 for test on our desktop, 1000 for HPC
+  size = 10
+)
+
+xgb_grid
+```
+See the combinations
+```{r}
+ggplot(data = xgb_grid,
+       aes(x = tree_depth, 
+           y = min_n)) +
+  geom_point(aes(color = factor(learn_rate),
+                 size = trees),
+             alpha = .5,
+             show.legend = FALSE)
+```
+
+## 4. Model Tuning
+```{r xgb_grid_result}
+set.seed(123)
+registerDoParallel(cores=parallel::detectCores()-1)
+xgb_res <- tune_race_anova(object = xgb_spec,
+                      preprocessor = corn_recipe,
+                      resamples = resampling_foldcv,
+                      grid = xgb_grid,
+                      control = control_race(save_pred = TRUE))
+
+stopImplicitCluster()
+
+beepr::beep()
+xgb_res$.metrics[[2]]
+```
+Let's check the results
+```{r}
+plot_race(xgb_res)
+```
+
+
+
+## 5. Select Best Models
+
+We select the best models using three strategies (best, within 1 SE, within 2% loss) which we learned in class:
+
+```{r}
+# Based on lowest RMSE
+best_rmse <- xgb_res %>% 
+  select_best(metric = "rmse")%>% 
+  mutate(source = "best_rmse")
+
+best_rmse
+
+```
+
+
+```{r}
+# Based on lowers RMSE within 1% loss
+best_rmse_pct_loss <- xgb_res %>% 
+  select_by_pct_loss("min_n",
+                     metric = "rmse",
+                     limit = 1
+                     )%>% 
+  mutate(source = "best_rmse_pct_loss")
+
+best_rmse_pct_loss
+```
+
+```{r}
+# Based on lowest RMSE within 1 se
+best_rmse_one_std_err <- xgb_res %>% 
+  select_by_one_std_err(metric = "rmse",
+                        eval_time = 100,
+                        trees
+                        )%>% 
+  mutate(source = "best_rmse_one_std_err")
+
+best_rmse_one_std_err
+```
+
+Here we use all three methods which we learn in this class for R2.
+
+```{r}
+# Based on greatest R2
+best_r2 <- xgb_res %>% 
+  select_best(metric = "rsq")%>% 
+  mutate(source = "best_r2")
+
+best_r2
+```
+
+```{r}
+# Based on lowers R2 within 1% loss
+best_r2_pct_loss <- xgb_res %>% 
+  select_by_pct_loss("min_n",
+                     metric = "rsq",
+                     limit = 1
+                     ) %>% 
+  mutate(source = "best_r2_pct_loss")
+
+best_r2_pct_loss
+```
+
+```{r}
+# Based on lowest R2 within 1 se
+best_r2_one_std_error <- xgb_res %>% 
+  select_by_one_std_err(metric = "rsq",
+                        eval_time = 100,
+                        trees
+                        ) %>%
+  mutate(source = "best_r2_one_std_error")
+
+best_r2_one_std_error
+```
+
+## Compare and Finalize Model
+
+```{r comparing values}
+best_rmse %>% 
+  bind_rows(best_rmse_pct_loss, 
+            best_rmse_one_std_err, 
+            best_r2, 
+            best_r2_pct_loss, 
+            best_r2_one_std_error)
+
+test_wf <- workflow() %>%
+  add_recipe(corn_recipe) %>%
+  add_model(final_spec)
+
+test_fit <- fit(test_wf, data = corn_train)
+
+predict(test_fit, new_data = corn_train) %>% head(20)
+```
+Record the best combo here: 
+trees = 116
+tree_depth = 9
+min_n = 34
+learn_rate = 0.01690976
+
+## 5. Final Specification
+
+```{r final_spec_fit}
+final_spec <- boost_tree(
+  trees = best_r2$trees,           # Number of boosting rounds (trees)
+  tree_depth = best_r2$tree_depth, # Maximum depth of each tree
+  min_n = best_r2$min_n,           # Minimum number of samples to split a node
+  learn_rate = best_r2$learn_rate  # Learning rate (step size shrinkage)
+) %>%
+  set_engine("xgboost") %>%
+  set_mode("regression")
+
+final_spec
+```
+
+## 6. Final Fit and Predictions
+
+## Validation
+
+```{r final_fit}
+set.seed(10)
+final_fit <- last_fit(final_spec,
+                corn_recipe,
+                split = corn_split)
+
+final_fit %>%
+  collect_predictions()
+```
+## 7. Evaluate on Test Set
+
+```{r final_fit_metrics}
+final_fit %>%
+  collect_metrics()
+```
+rmse = 2.0326181
+rsq = 0.5822286
+
+## 8. Evaluate on Training Set
+
+```{r}
+final_spec %>%
+  fit(yield_mg_ha ~ .,
+      data = bake(corn_prep, 
+                  corn_train)) %>%
+  augment(new_data = bake(corn_prep, 
+                          corn_train)) %>% 
+  rmse(yield_mg_ha, .pred) %>%
+  bind_rows(
+    
+    
+# R2
+final_spec %>%
+  fit(yield_mg_ha ~ .,
+      data = bake(corn_prep, 
+                  corn_train)) %>%
+  augment(new_data = bake(corn_prep, 
+                          corn_train)) %>% 
+  rsq(yield_mg_ha, .pred))
+```
+rmse = 2.6446045
+rsq = 0.2977221
+
+It's interesting that training set result is worse.
+
+## 9. Predicted vs Observed Plot
+
+```{r}
+final_fit %>%
+  collect_predictions() %>%
+  ggplot(aes(x = yield_mg_ha,
+             y = .pred)) +
+  geom_point() +
+  geom_abline() +
+  geom_smooth(method = "lm") +
+  scale_x_continuous(limits = c(1, 25)) +
+  scale_y_continuous(limits = c(1, 25)) 
+```
+
+## 10. Variable Importance
+
+```{r final_spec}
+final_spec %>%
+  fit(yield_mg_ha ~ .,
+         data = bake(corn_prep, corn_train)) %>% #There little change in variable improtance if you use full dataset
+    vi() %>%
+  mutate(
+    Variable = fct_reorder(Variable, 
+                           Importance)
+  ) %>%
+  ggplot(aes(x = Importance, 
+             y = Variable)) +
+  geom_col() +
+  scale_x_continuous(expand = c(0, 0)) +
+  labs(y = NULL)
+
+final_spec %>%
+  fit(
+    yield_mg_ha ~ .,
+    data = bake(corn_prep, corn_train)
+  ) %>%
+  vi() %>%
+  slice_max(Importance, n = 20) %>%
+  mutate(
+    Variable = stringr::str_trunc(Variable, width = 25),
+    Variable = fct_reorder(Variable, Importance)
+  ) %>%
+  ggplot(aes(x = Importance, y = Variable)) +
+  geom_col() +
+  scale_x_continuous(expand = c(0, 0)) +
+  labs(y = NULL) +
+  theme(axis.text.y = element_text(size = 8))
+```
+
+
