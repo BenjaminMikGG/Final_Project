@@ -1,0 +1,480 @@
+---
+title: "XG-Boost_Training"
+format: html
+editor: Ming/Ishwari
+---
+
+# 1) Setup
+
+```{r}
+# shared_lib_path <- "/work/crss8030/instructor_data/shared_R_libs"
+
+#class_packages <- c("tidymodels", "tidyverse", "vip", "ranger", "finetune", "parsnip", "reticulate", "xgboost", "doParallel", "lme4", "here")
+
+#install.packages(class_packages, lib = shared_lib_path)
+```
+
+# Locate the installed libraries (important step while running the script in cluster - sapelo2)
+
+```{r}
+.libPaths(c("/work/crss8030/instructor_data/shared_R_libs", .libPaths()))
+```
+
+
+```{r}
+#| message: false
+#| warning: false
+library(finetune)     # Additional tuning strategies (e.g., racing, ANOVA-based tuning)
+library(vip)          # For plotting variable importance from fitted models
+library(xgboost)      # XGBoost implementation in R
+library(ranger)       # Fast implementation of Random Forests
+library(tidyverse)    # Data wrangling and visualization
+library(tidymodels)   # for func：initial_split
+library(doParallel)   # For parallel computing (useful during resampling/tuning)
+library(tidymodels)   # Core framework for modeling (includes recipes, workflows, parsnip, etc.)
+library(finetune)     # Additional tuning strategies (e.g., racing, ANOVA-based tuning)
+library(lme4)         # The matrix package and other mathmatical computation for xgboost
+library(here)         # Gives the absolute path starting from Rproj, works well with different scripts (R, .rmd or .qmd)
+library(quarto)       # helps to export the qmd script to R script
+#library(caret)       # Other great library for Machine Learning 
+
+here::here()
+```
+
+
+```{r read train data}
+corn <- readRDS("../data/training/train_final.rds")
+head(corn)
+```
+
+# 2) ML workflow
+
+## 1. Pre-processing
+
+### a. Data split
+```{r corn_split}
+set.seed(123) # Setting seed to get reproducible results 
+corn_split <- initial_split(
+  corn, 
+  # proportion of split, more for test data set cuz we have lots of rows
+  prop = .65, 
+  strata = yield_mg_ha  # Stratify by target variable
+  )
+corn_split
+# <Training/Testing/Total>
+# <106908/57569/164477>
+```
+
+
+```{r corn_train}
+corn_train <- training(corn_split)  # 65% of data
+corn_train #This is your training data frame
+
+corn_test <- testing(corn_split)    # 35% of data
+corn_test
+
+```
+
+
+### b. Distribution of target variable
+
+```{r distribution}
+density_plot <- ggplot() +
+  geom_density(data = corn_train, 
+               aes(x = yield_mg_ha),
+               color = "red") +
+  geom_density(data = corn_test, 
+               aes(x = yield_mg_ha),
+               color = "blue") 
+  # almost perfect distribution
+
+# lets print the undergoing process in the console, (important when running in the terminal later on)
+cat(paste0("Saving...... density plot of train and test data"))
+
+ggsave(plot = density_plot, 
+       path = here("output", "png"),
+       filename = "density_plot_test_train.png",
+       height = 6,
+       width = 9,
+       dpi = 600)
+```
+
+## 2. Data processing with recipe
+```{r corn_recipe}
+cat("\nCreate recipe for data preprocessing\n")
+# Create recipe for data preprocessing
+corn_recipe <- recipe(yield_mg_ha ~ ., data = corn_train) %>% # Remove identifier columns and months 
+  step_rm(
+    year,       # Remove year identifier
+    site,        # Remove site identifier
+    hybrid,      #Remove hybrid, cuz too many cols 
+    parent1      #parent1
+  ) %>%
+  step_string2factor(parent2) %>%
+  step_unknown(parent2) %>%
+  step_unknown(previous_crop) %>%
+  step_other(parent2, threshold = 0.01, other = "rare")%>%
+  step_dummy(all_nominal_predictors())  # make cat to num for hybrid and pervious crop
+corn_recipe
+```
+
+```{r corn_prep}
+# Prep the recipe to estimate any required statistics
+corn_prep <- corn_recipe %>% 
+  prep()
+
+# Examine preprocessing steps
+corn_prep
+```
+
+## 3. Training
+
+### a. Model specification
+
+```{r xgb_spec}
+xgb_spec <- #Specifying XgBoost as our model type, asking to tune the hyperparameters
+  boost_tree(
+   # Total number of boosting iterations
+    trees = tune(),
+         # Maximum depth of each tree
+    tree_depth = tune(),
+             # Minimum samples required to split a node
+    min_n = tune(),
+        # Step size shrinkage for each boosting step
+    learn_rate = tune()
+    ) %>%
+        #specify engine 
+  set_engine("xgboost") %>%
+       # Set to mode
+  set_mode("regression")
+xgb_spec
+
+```
+
+
+### b. Cross-validation setup
+We use 10-fold cross-validation to evaluate model performance during tuning:
+```{r}
+set.seed(1234)  
+resampling_foldcv <- vfold_cv(corn_train, # Create 10-fold cross-validation resampling object from training data
+                              v = 10)
+
+
+# Create leave one year out cv object from the sampling data
+resampling_fold_loyo<-group_vfold_cv(corn_train,
+                                     group = year
+                                     )
+
+# Create leave one location out cv object from the sampling data
+resampling_fold_loso<-group_vfold_cv(corn_train,
+                                     group = site
+                                     )
+```
+### c. Hyperparameter grid with Latin Hypercube Sampling
+
+We use Latin hypercube sampling to generate a diverse grid of hyperparameter combinations:
+
+```{r }
+xgb_grid <- grid_latin_hypercube(
+  tree_depth(),
+  min_n(),
+  learn_rate(),
+  trees(),
+  # 10 for test on our desktop, 1000 for HPC
+  size = 1
+)
+
+xgb_grid
+```
+See the combinations
+```{r}
+ggplot(data = xgb_grid,
+       aes(x = tree_depth, 
+           y = min_n)) +
+  geom_point(aes(color = factor(learn_rate),
+                 size = trees),
+             alpha = .5,
+             show.legend = FALSE)
+```
+
+## 4. Model Tuning
+Detect core numbers of Sapelo2
+```{r}
+# Detect Cores for Slurm (Cluster - Sapelo2)
+
+# lets look into our current environment to see the available cores
+n_cores <- as.numeric(Sys.getenv("SLURM_CPUS_ON_NODE"))
+
+if (is.na(n_cores)) n_cores <- parallel::detectCores() - 1
+
+# Start the Cluster
+cl <- makePSOCKcluster(n_cores)
+
+registerDoParallel(cl)
+
+cat(paste0("\nFound and registered ", n_cores, " cores to work with\n"))
+
+```
+
+
+```{r xgb_grid_result}
+
+# Create the list of CV techniques so we can loop through them
+cv_list <- list(
+  vfold = resampling_foldcv,
+  year = resampling_fold_loyo,
+  site = resampling_fold_loso
+  
+)
+
+# Create a emty list to store the results from the loop
+results <- list()
+
+
+# Create our loop
+for (i in seq_along(cv_list)) {
+  name <- names(cv_list)[i]
+  
+  results[[name]] <- tune_race_anova(object = xgb_spec, 
+                                     preprocessor = corn_recipe,
+                                     resamples = cv_list[[i]],
+                                     grid = xgb_grid,
+                                     control = control_race(save_pred=TRUE,
+                                                             parallel_over = "everything"
+                                                             )
+                                     )
+}
+
+beepr::beep()
+stopCluster(cl)
+results
+
+```
+
+
+Let's check the results
+```{r}
+library(dplyr)
+
+# Create a dataframe structure from the list obtained after running the loop
+results_df <-  tibble(method = names(results),
+                      diff_cv = results
+                      ) %>%
+  # Collect the metrices for each CV techniques using map function
+  mutate(metrices = map2(diff_cv,method,
+                         ~.x %>%
+                           collect_metrics() %>%
+                           mutate(method = .y, .before= "trees")
+                           
+                         ))
+
+results_df 
+
+# bind all the metrices together so to select the best performing one
+all_metrices <- do.call(bind_rows, results_df$metrices)
+```
+
+```{r}
+# Automating to pull the best method out of 3 we ran
+
+best_method <- all_metrices %>%
+  filter(.metric == "rmse") %>%
+  slice_min(mean, n = 1) %>%
+  pull(method)
+  
+
+# Getting the metrice (hyperparameter values of the best performing CV)
+best_cv_object <- results_df %>%
+  filter(method == best_method) %>%
+  pull(diff_cv) %>% 
+  first()
+  
+```
+
+## 5. Select Best Models
+
+We select the best models using three strategies (best, within 1 SE, within 2% loss) which we learned in class:
+
+```{r}
+# Best RMSE
+best_rmse <- best_cv_object %>% 
+      select_best(metric = "rmse")%>% 
+  mutate(source = "best_rmse")
+
+best_rmse
+```
+
+```{r}
+# Based on greatest R2
+best_r2 <- best_cv_object %>% 
+  select_best(metric = "rsq")%>% 
+  mutate(source = "best_r2")
+
+best_r2
+```
+
+## 6. Compare and Finalize Model
+
+```{r comparing values}
+best_rmse %>% 
+  bind_rows(best_rmse, 
+            best_r2) %>%
+  dplyr::select(source, everything())
+```
+  
+Record the best combo here: 
+trees = 116
+tree_depth = 9
+min_n = 34
+learn_rate = 0.01690976
+
+## 7. Final Specification
+
+```{r final_spec_fit}
+final_spec <- boost_tree(
+  trees = best_r2$trees,           # Number of boosting rounds (trees)
+  tree_depth = best_r2$tree_depth, # Maximum depth of each tree
+  min_n = best_r2$min_n,           # Minimum number of samples to split a node
+  learn_rate = best_r2$learn_rate  # Learning rate (step size shrinkage)
+) %>%
+  set_engine("xgboost") %>%
+  set_mode("regression")
+
+final_spec
+```
+
+## 8. Final Fit and Predictions
+
+### Validation
+
+```{r final_fit}
+set.seed(10)
+final_fit <- last_fit(final_spec,
+                weather_recipe,
+                split = weather_split)
+
+final_fit %>%
+  collect_predictions()
+```
+
+
+## 9. Evaluate on Test Set
+
+```{r final_fit_metrics}
+test_met <- final_fit %>%
+  collect_metrics() %>% 
+  mutate(estimate = round(.estimate, 3))
+```
+
+## 10. Evaluate on Training Set
+
+```{r}
+final_spec %>%
+  fit(strength_gtex ~ .,
+      data = bake(weather_prep, 
+                  weather_train)) %>%
+  augment(new_data = bake(weather_prep, 
+                          weather_train)) %>% 
+  rmse(strength_gtex, .pred) %>%
+  bind_rows(
+    
+    
+# R2
+final_spec %>%
+  fit(strength_gtex ~ .,
+      data = bake(weather_prep, 
+                  weather_train)) %>%
+  augment(new_data = bake(weather_prep, 
+                          weather_train)) %>% 
+  rsq(strength_gtex, .pred))
+```
+
+```{r}
+final_fit %>%
+  collect_predictions() %>%
+  ggplot(aes(x = strength_gtex,
+             y = .pred)) +
+  geom_point() +
+  geom_abline() +
+  geom_smooth(method = "lm") +
+  scale_x_continuous(limits = c(1, 25)) +
+  scale_y_continuous(limits = c(1, 25)) 
+```
+
+## 11. Predicted vs Observed Plot (publication ready)
+
+```{r}
+publication_ready <- final_fit %>%
+  collect_predictions() %>%
+  ggplot(aes(x = strength_gtex,
+             y = .pred)) +
+  # Changing the shape of the points to 
+  geom_point(aes(fill = strength_gtex),shape = 21, alpha = .7, show.legend = F) +
+  # Using colorblind friendly color scale 
+  scale_fill_viridis_c(option = "H" ) +
+  # Changing the color and linetype of abline
+  geom_abline(color = "red", linetype = 2) +
+  geom_smooth(method = "lm") +
+  labs(x = "Observed Strenght (gtex)",
+       y = "Predicted Strength (gtex)")+
+  # Annotate R-sq and RMSE value in the plot
+  annotate("label", x = Inf, y = -Inf,
+           label = paste0("R-sq:",test_met$estimate[[2]], "\nRMSE:",test_met$estimate[[1]]),
+          hjust = 1, vjust = -0.5 ) +
+  
+  
+  scale_x_continuous(limits = c(20, 40)) +
+  scale_y_continuous(limits = c(20, 40)) +
+  
+  # Changing the theme of the plot
+  theme(panel.background = element_rect(fill = "gray82"),
+        panel.grid = element_blank()
+        )
+
+publication_ready
+
+cat(paste0("\nSaving...... publication ready plot for test dataset\n"))
+
+ggsave(plot = publication_ready, 
+       path = here("output", "png"),
+       filename = "model_perf_test_data.png",
+       height = 6,
+       width = 9,
+       dpi = 600)
+  
+```
+
+
+## 12. Variable Importance
+
+```{r final_spec}
+vip <- final_spec %>%
+  fit(strength_gtex ~ .,
+         data = bake(weather_prep, weather_train)) %>% #There little change in variable improtance if you use full dataset
+    vi() %>%
+  mutate(
+    Variable = fct_reorder(Variable, 
+                           Importance)
+  ) %>%
+  ggplot(aes(x = Importance, 
+             y = Variable,
+             fill = Importance)) +
+  geom_col() +
+  scale_x_continuous(expand = c(0, 0)) +
+  labs(y = NULL)+
+  theme(panel.background  = element_rect(fill = "gray82"),
+        panel.grid = element_blank())
+
+cat(paste0("\nSaving...... publication ready plot for variable importance\n"))
+
+ggsave(plot = vip, 
+       path = here("output/png"),
+       filename = "vip_test_data.png",
+       height = 6,
+       width = 9,
+       dpi = 600)
+```
+
+```{r covert qmd to R script}
+knitr::purl("XG-Boost_Training.qmd", output = "sapelo_script.R", documentation = 0)
+```

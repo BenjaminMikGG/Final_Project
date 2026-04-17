@@ -15,6 +15,7 @@ library(ranger)       # Fast implementation of Random Forests
 library(tidyverse)    # Data wrangling and visualization
 library(tidymodels)   # for func：initial_split
 library(doParallel)   # For parallel computing (useful during resampling/tuning)
+library(here)
 ```
 
 
@@ -278,10 +279,14 @@ learn_rate = 0.01690976
 
 ```{r final_spec_fit}
 final_spec <- boost_tree(
-  trees = best_r2$trees,           # Number of boosting rounds (trees)
-  tree_depth = best_r2$tree_depth, # Maximum depth of each tree
-  min_n = best_r2$min_n,           # Minimum number of samples to split a node
-  learn_rate = best_r2$learn_rate  # Learning rate (step size shrinkage)
+  #trees = best_r2$trees,           # Number of boosting rounds (trees)
+  trees = 116,
+  #tree_depth = best_r2$tree_depth, # Maximum depth of each tree
+  tree_depth = 9,
+  #min_n = best_r2$min_n,           # Minimum number of samples to split a node
+  min_n = 34,
+  #learn_rate = best_r2$learn_rate  # Learning rate (step size shrinkage)
+  learn_rate = 0.01690976
 ) %>%
   set_engine("xgboost") %>%
   set_mode("regression")
@@ -301,6 +306,9 @@ final_fit <- last_fit(final_spec,
 
 final_fit %>%
   collect_predictions()
+
+# save the model
+saveRDS(final_fit, "final_model.rds")
 ```
 ## 7. Evaluate on Test Set
 
@@ -341,7 +349,7 @@ It's interesting that training set result is worse.
 ## 9. Predicted vs Observed Plot
 
 ```{r}
-final_fit %>%
+final_fit_plot <-final_fit %>%
   collect_predictions() %>%
   ggplot(aes(x = yield_mg_ha,
              y = .pred)) +
@@ -350,6 +358,14 @@ final_fit %>%
   geom_smooth(method = "lm") +
   scale_x_continuous(limits = c(1, 25)) +
   scale_y_continuous(limits = c(1, 25)) 
+
+#save the output
+ggsave(plot = final_fit_plot, 
+       path = here("output", "png"),
+       filename = "final_fit_plot.png",
+       height = 6,
+       width = 9,
+       dpi = 600)
 ```
 
 ## 10. Variable Importance
@@ -369,7 +385,8 @@ final_spec %>%
   scale_x_continuous(expand = c(0, 0)) +
   labs(y = NULL)
 
-final_spec %>%
+# only show top 20 
+final_spec_plot <- final_spec %>%
   fit(
     yield_mg_ha ~ .,
     data = bake(corn_prep, corn_train)
@@ -385,6 +402,46 @@ final_spec %>%
   scale_x_continuous(expand = c(0, 0)) +
   labs(y = NULL) +
   theme(axis.text.y = element_text(size = 8))
+
+# save the output
+ggsave(plot = final_spec_plot, 
+       path = here("output", "png"),
+       filename = "final_spec_plot.png",
+       height = 6,
+       width = 9,
+       dpi = 600)
 ```
 
+# Do test data
+Let's predict the test data
+```{r save model}
+final_wf <- workflow() %>%
+  add_recipe(corn_recipe) %>%
+  add_model(final_spec)
+
+final_model <- fit(final_wf, data = corn_train)
+
+saveRDS(final_model, "final_model.rds")
+```
+
+
+```{r use model to predict}
+final_model <- readRDS("final_model.rds")
+
+test_data <- read.csv("../data/testing/test_final.csv")
+
+pred_test <- predict(final_model, new_data = test_data)
+pred_test
+```
+
+```{r put .pred back to test data}
+test_submission <- read_csv("../data/testing/testing_submission.csv")
+
+test_out <- bind_cols(test_submission, pred_test) %>%
+  dplyr::select(-yield_mg_ha)  %>% 
+  rename(yield_mg_ha = .pred)
+  
+
+write_csv(test_out,"../data/testing/result1.csv")
+```
 
