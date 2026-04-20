@@ -19,6 +19,9 @@ editor: Ming/Ishwari
 ```{r}
 .libPaths(c("/work/crss8030/instructor_data/shared_R_libs", .libPaths()))
 ```
+```{r}
+#.libPaths()
+```
 
 
 ```{r}
