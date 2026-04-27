@@ -6,6 +6,7 @@ library(bonsai)
 library(lightgbm)
 library(parallel)
 library(doParallel)
+library(here)
 
 
 # STEP 2: LOAD DATA
@@ -149,7 +150,7 @@ tryCatch({
 
 saveRDS(lgbm_res, "output/lgbm_res.rds")
 # lgbm_res <- readRDS("output/lgbm_res.rds")
-
+lgbm_res<-readRDS("./output/final prediction/lgbm_res.rds")
 
 # STEP 11: SELECT BEST & FINALIZE
 best_rmse <- lgbm_res %>% select_best(metric = "rmse")
@@ -161,7 +162,7 @@ final_fit %>% collect_metrics()
 
 
 # STEP 12: PREDICTED VS OBSERVED PLOT
-final_fit %>%
+final_fit_lgbm_plot <- final_fit %>%
   collect_predictions() %>%
   ggplot(aes(x = yield_mg_ha, y = .pred)) +
   geom_point(alpha = 0.3, size = 0.8, color = "blue") +
@@ -172,6 +173,13 @@ final_fit %>%
     x = "Observed yield (Mg/ha)", y = "Predicted yield (Mg/ha)"
   ) +
   theme_minimal()
+
+ggsave(plot = final_fit_lgbm_plot, 
+       path = here("./output/Ish/png/", "png"),
+       filename = "mfinal_fit_lgbm_plot.png",
+       height = 6,
+       width = 9,
+       dpi = 600)
 
 
 # STEP 13: REFIT ON FULL TRAINING DATA & PREDICT TEST

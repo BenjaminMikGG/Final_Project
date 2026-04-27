@@ -7,11 +7,11 @@ editor: Ming/Ishwari
 # 1) Setup
 
 ```{r}
-# shared_lib_path <- "/work/crss8030/instructor_data/shared_R_libs"
+shared_lib_path <- "/work/crss8030/instructor_data/shared_R_libs"
 
-#class_packages <- c("tidymodels", "tidyverse", "vip", "ranger", "finetune", "parsnip", "reticulate", "xgboost", "doParallel", "lme4", "here")
+class_packages <- c("tidymodels", "tidyverse", "vip", "ranger", "finetune", "parsnip", "reticulate", "xgboost", "doParallel", "lme4", "here")
 
-#install.packages(class_packages, lib = shared_lib_path)
+install.packages(class_packages, lib = shared_lib_path)
 ```
 
 # Locate the installed libraries (important step while running the script in cluster - sapelo2)
@@ -20,7 +20,7 @@ editor: Ming/Ishwari
 .libPaths(c("/work/crss8030/instructor_data/shared_R_libs", .libPaths()))
 ```
 ```{r}
-#.libPaths()
+.libPaths()
 ```
 
 

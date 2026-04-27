@@ -5,6 +5,7 @@ library(vip)
 library(xgboost)
 library(tidyverse)
 library(doParallel)
+library(here)
 
 tidymodels_prefer()
 dir.create("output", showWarnings = FALSE)
@@ -165,6 +166,7 @@ xgb_res <- tune_race_anova(
 stopImplicitCluster()
 saveRDS(xgb_res, "output/xgb_res.rds")
 # xgb_res <- readRDS("output/xgb_res.rds")
+xgb_res<-readRDS("../Final_Project/output/Ish/xgb_res-4.19.rds")
 
 
 # STEP 13: VISUALIZE RACE RESULTS
@@ -191,6 +193,7 @@ best_r2 <- xgb_res %>%
 best_r2_pct_loss <- xgb_res %>%
   select_by_pct_loss("min_n", metric = "rsq", limit = 1) %>%
   mutate(source = "best_r2_pct_loss")
+
 
 best_r2_one_std_error <- xgb_res %>%
   select_by_one_std_err(metric = "rsq", trees) %>%
@@ -241,13 +244,22 @@ final_spec %>%
   )
 
 
+
 # STEP 20: PREDICTED VS OBSERVED PLOT
-final_fit %>%
+final_fit_plot<-final_fit %>%
   collect_predictions() %>%
   ggplot(aes(x = yield_mg_ha, y = .pred)) +
   geom_point() +
   geom_abline() +
   geom_smooth(method = "lm")
+
+# save plot png
+ggsave(plot = final_fit_plot, 
+       path = here("output/Ish", "png"),
+       filename = "final_fit_plot.png",
+       height = 6,
+       width = 9,
+       dpi = 600)
 
 
 # STEP 21: VARIABLE IMPORTANCE
