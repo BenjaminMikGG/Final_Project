@@ -63,4 +63,7 @@ Open source data\
 Data wrangling\
 Feature engineering
 
-Ishwari: Modeling Strategy Training Strategy Shiny app making
+Ishwari:     
+Modeling Strategy   
+Training Strategy    
+Shiny app making
